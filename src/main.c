@@ -23,10 +23,11 @@ SOFTWARE.
 */
 
 /*
-# Because *real programmers* make their own window managers.
+# Because *real programmers* make their *own* window managers.
 I wonder if I can get treesitter to highlight markdown in a c comment.
 > That was a waste of time. This has completely ruined Vim for me. Better switch
 to Emacs.
+
 > That last sentence was a joke. Do I really seem like the kind of person to use
 Emacs??!?!!!?
 ## Credits
