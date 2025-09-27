@@ -1,3 +1,51 @@
+/*
+MIT License
+
+Copyright (c) 2025 Alex Ydens
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+/*
+# Because *real programmers* make their own window managers.
+I wonder if I can get treesitter to highlight markdown in a c comment.
+> That was a waste of time. This has completely ruined Vim for me. Better switch
+to Emacs.
+> That last sentence was a joke. Do I really seem like the kind of person to use
+Emacs??!?!!!?
+## Credits
+- Wherever the XCB and XKBCOMMON docs are, saved me trawling through headers
+- I did try to look at the DWM source code, but I gave up pretty quickly. That
+being said, seeing how short it was might be the only reason I started writing
+this. I use a lot the tools from suckless software, they work pretty well, and
+are easy to understand. Definetly check them out.
+## Here are some more stable and just generally better projects I have used:
+### X:
+- i3wm
+- dwm
+### Wayland:
+- Hyprland
+### If you want a more user-friendly experience:
+- GNOME
+- KDE Plasma
+*/
+
 /* Includes */
 #include <unistd.h>
 #include <stdbool.h>
