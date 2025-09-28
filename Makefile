@@ -6,8 +6,8 @@ SRC_DIR=src
 OBJ_DIR=obj
 BIN_DIR=bin
 
-#CFLAGS = -Wall -Wextra -Wpedantic -Werror -std=c11 -I$(INC_DIR)
-CFLAGS = -Wall -Wextra -Wpedantic -Werror -std=c11
+#CFLAGS = -Wall -Wextra -Wpedantic -Werror -std=c11 -ggdb -I$(INC_DIR)
+CFLAGS = -Wall -Wextra -Wpedantic -Werror -std=c11 -ggdb
 CFLAGS += -Wno-unused
 LDFLAGS = -lxcb -lxkbcommon
 

@@ -32,14 +32,6 @@ SOFTWARE.
 #include <xcb/xcb.h>
 #include <xkbcommon/xkbcommon.h>
 
-/* Window structure */
-typedef struct {
-  xcb_window_t handle;
-  void *parent;
-  void *child;
-  enum { LEFT, RIGHT, UP, DOWN } direction;
-} window_t;
-
 /* Global state */
 static bool running = false;
 static xcb_connection_t *connection = NULL;
@@ -52,8 +44,6 @@ static xcb_atom_t WM_DELETE_WINDOW = 0;
 static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
-#define MAX_WINDOWS 100
-static window_t windows[MAX_WINDOWS];
 
 /* Helper function declaractions */
 static void connect(void);
@@ -65,9 +55,11 @@ static void init_xkb(void);
 static void grab_keys(void);
 static void create_cursor(void);
 static void cleanup(void);
-static void send_wm_event(xcb_atom_t atom, xcb_window_t window);
-static void refresh_layout(void);
 static xcb_window_t get_focused_window(void);
+static void send_wm_event(xcb_atom_t atom, xcb_window_t window);
+static void change_window_rect(
+    xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+);
 /* Event handler declaractions */
 static void handle_create_notify(xcb_create_notify_event_t *event);
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event);
@@ -84,6 +76,7 @@ static void handle_key_release(xcb_key_release_event_t *event);
 
 /* Entry point */
 int main(int argc, char *argv[]) {
+  /* Setup */
   connect();
   get_setup_info();
   get_screen_and_root();
@@ -142,6 +135,8 @@ int main(int argc, char *argv[]) {
     }
     free(event);
   }
+  /* Cleanup */
+  cleanup();
   return 0;
   (void)argc;
   (void)argv;
@@ -311,6 +306,23 @@ static void cleanup(void) {
   xkb_context_unref(xkb_context);
   xcb_disconnect(connection);
 }
+static xcb_window_t get_focused_window(void) {
+  xcb_generic_error_t *error = NULL;
+  xcb_get_input_focus_cookie_t focus_cookie = xcb_get_input_focus(connection);
+  xcb_get_input_focus_reply_t *focus_reply = xcb_get_input_focus_reply(
+      connection, focus_cookie, &error
+  );
+  if (!focus_reply) {
+    if (error)
+      printf("ERROR: Failed to get focused window (%d)\n", error->error_code);
+    else
+      printf("ERROR: Failed to get focused window (no generic error)\n");
+    abort();
+  }
+  xcb_window_t window = focus_reply->focus;
+  free(focus_reply);
+  return window;
+}
 static void send_wm_event(xcb_atom_t atom, xcb_window_t window) {
   const xcb_client_message_event_t wm_event = {
     .response_type = XCB_CLIENT_MESSAGE,
@@ -334,23 +346,23 @@ static void send_wm_event(xcb_atom_t atom, xcb_window_t window) {
     free(error);
   }
 }
-static void refresh_layout(void);
-static xcb_window_t get_focused_window(void) {
-  xcb_generic_error_t *error = NULL;
-  xcb_get_input_focus_cookie_t focus_cookie = xcb_get_input_focus(connection);
-  xcb_get_input_focus_reply_t *focus_reply = xcb_get_input_focus_reply(
-      connection, focus_cookie, &error
+static void change_window_rect(
+    xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+) {
+  uint32_t value_list[4] = { x, y, width, height };
+  xcb_void_cookie_t cookie = xcb_configure_window(
+      connection, window,
+      XCB_CONFIG_WINDOW_X
+      | XCB_CONFIG_WINDOW_Y
+      | XCB_CONFIG_WINDOW_WIDTH
+      | XCB_CONFIG_WINDOW_HEIGHT,
+      value_list
   );
-  if (!focus_reply) {
-    if (error)
-      printf("ERROR: Failed to get focused window (%d)\n", error->error_code);
-    else
-      printf("ERROR: Failed to get focused window (no generic error)\n");
-    abort();
+  xcb_generic_error_t *error = xcb_request_check(connection, cookie);
+  if (error) {
+    printf("ERROR: Failed to configure window (%d)\n", error->error_code);
+    free(error);
   }
-  xcb_window_t window = focus_reply->focus;
-  free(focus_reply);
-  return window;
 }
 /* Event handler definitions */
 static void handle_create_notify(xcb_create_notify_event_t *event) { }
@@ -405,30 +417,24 @@ static void handle_configure_request(xcb_configure_request_event_t *event) {
 }
 static void handle_circulate_request(xcb_circulate_request_event_t *event) { }
 static void handle_key_press(xcb_key_press_event_t *event) {
-  if (
-    xkb_state_key_get_one_sym(xkb_state, event->detail) == XKB_KEY_c
-    && (event->state & XCB_MOD_MASK_1)
-  )
+  xkb_keysym_t keysym =
+      xkb_state_key_get_one_sym(xkb_state, event->detail);
+  if (keysym == XKB_KEY_c && (event->state & XCB_MOD_MASK_1))
     running = false;
   if (
-    xkb_state_key_get_one_sym(xkb_state, event->detail) == XKB_KEY_q
+    keysym == XKB_KEY_q
     && (event->state & (XCB_MOD_MASK_1|XCB_MOD_MASK_SHIFT))
   ) {
     send_wm_event(WM_DELETE_WINDOW, get_focused_window());
     xcb_flush(connection);
   }
-  if (
-    xkb_state_key_get_one_sym(xkb_state, event->detail) == XKB_KEY_Return
-    && (event->state & XCB_MOD_MASK_1)
-  ) {
-    char *args[] = { "st", NULL };
+  if (keysym == XKB_KEY_d && (event->state & XCB_MOD_MASK_1)) {
+    char *args[] = { "dmenu_run", "-m", "0", NULL };
     if (!fork()) execvp(args[0], args);
   }
-  if (
-    xkb_state_key_get_one_sym(xkb_state, event->detail) == XKB_KEY_d
-    && (event->state & XCB_MOD_MASK_1)
-  ) {
-    char *args[] = { "dmenu_run", "-m", "0", NULL };
+
+  if (keysym == XKB_KEY_Return && (event->state & XCB_MOD_MASK_1)) {
+    char *args[] = { "st", NULL };
     if (!fork()) execvp(args[0], args);
   }
 }
