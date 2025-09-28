@@ -32,6 +32,17 @@ SOFTWARE.
 #include <xcb/xcb.h>
 #include <xkbcommon/xkbcommon.h>
 
+/* Direction */
+typedef enum { DIR_HORIZONTAL, DIR_VERTICAL } direction_t;
+/* Region of space */
+typedef struct {
+  xcb_window_t handle;
+  int parent, child0, child1;
+  direction_t split;
+  float factor;
+  bool exists;
+} region_t;
+
 /* Global state */
 static bool running = false;
 static xcb_connection_t *connection = NULL;
@@ -44,6 +55,11 @@ static xcb_atom_t WM_DELETE_WINDOW = 0;
 static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
+/* For tiling */
+#define MAX_REGIONS 100
+static region_t regions[MAX_REGIONS];
+static int root_region = -1;
+static direction_t next_direction;
 
 /* Helper function declaractions */
 static void connect(void);
@@ -60,6 +76,8 @@ static void send_wm_event(xcb_atom_t atom, xcb_window_t window);
 static void change_window_rect(
     xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
 );
+static int get_empty_region(void);
+static void refresh_layout(void);
 /* Event handler declaractions */
 static void handle_create_notify(xcb_create_notify_event_t *event);
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event);
@@ -88,6 +106,17 @@ int main(int argc, char *argv[]) {
 
   /* Flush changes */
   xcb_flush(connection);
+
+  /* Clear regions */
+  for (int i = 0; i < MAX_REGIONS; i++) {
+    regions[i].handle = 0;
+    regions[i].parent = -1;
+    regions[i].child0 = -1;
+    regions[i].child1 = -1;
+    regions[i].split = DIR_HORIZONTAL;
+    regions[i].factor = 0.0f;
+    regions[i].exists = false;
+  }
 
   /* Event loop */
   running = true;
@@ -364,9 +393,115 @@ static void change_window_rect(
     free(error);
   }
 }
+static int get_empty_region(void) {
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (!(regions[i].exists))
+      region = i;
+  if (region < 0) {
+    printf("ERROR: Too many regions\n");
+    abort();
+  }
+  return region;
+}
+static void refresh_layout(void) {
+  if (!root_region) return;
+  int current = root_region;
+  /* TODO */
+}
 /* Event handler definitions */
-static void handle_create_notify(xcb_create_notify_event_t *event) { }
-static void handle_destroy_notify(xcb_destroy_notify_event_t *event) { }
+static void handle_create_notify(xcb_create_notify_event_t *event) {
+  printf("INFO: recieved create notify\n");
+  if (root_region < 0) {
+    root_region = 0;
+    regions[0].handle = event->window;
+    regions[0].parent = -1;
+    regions[0].child0 = -1;
+    regions[0].child1 = -1;
+    regions[0].split = DIR_HORIZONTAL;
+    regions[0].factor = 0.0f;
+    regions[0].exists = true;
+    return;
+  }
+  int parent = -1;
+  xcb_window_t focus = get_focused_window();
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].handle == focus)
+      parent = i;
+  if (parent < 0) {
+    printf("ERROR: Couldn't find parent\n");
+    abort();
+  }
+  int new_region = get_empty_region();
+  int new_window_region = get_empty_region();
+  int grandparent = regions[parent].parent;
+  if (regions[grandparent].child0 == parent)
+    regions[grandparent].child0 = new_region;
+  else if (regions[grandparent].child1 == parent)
+    regions[grandparent].child1 = new_region;
+  else {
+    printf("ERROR: Corrupted region tree\n");
+    abort();
+  }
+  regions[parent].parent = new_region;
+  regions[new_region].handle = 0;
+  regions[new_region].parent = grandparent;
+  regions[new_region].child0 = new_window_region;
+  regions[new_region].child1 = parent;
+  regions[new_region].split = next_direction;
+  regions[new_region].factor = 0.5f;
+  regions[new_region].exists = true;
+  regions[new_window_region].handle = event->window;
+  regions[new_window_region].parent = new_region;
+  regions[new_window_region].child0 = -1;
+  regions[new_window_region].child1 = -1;
+  regions[new_window_region].split = DIR_HORIZONTAL;
+  regions[new_window_region].factor = 0.0f;
+  regions[new_window_region].exists = true;
+  refresh_layout();
+}
+static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
+  printf("INFO: recieved destroy notify\n");
+  if (regions[root_window].handle == event->window) {
+    regions[root_window].exists = false;
+    root_window = -1;
+    return;
+  }
+  int deleting = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].handle == event->window)
+      deleting = i;
+  if (!deleting) {
+    printf("WARNING: Destroying window not found in region tree\n");
+    return;
+  }
+  int parent = regions[deleting].parent;
+  int grandparent = regions[parent].parent;
+  int sibling = -1;
+  if (regions[parent].child0 == deleting)
+    sibling = regions[parent].child1;
+  else if (regions[parent].child1 == deleting)
+    sibling = regions[parent].child0;
+  else {
+    printf("ERROR: Corrupted region tree\n");
+    abort();
+  }
+  regions[deleting].exists = false;
+  regions[parent].exists = false;
+  if (grandparent < 0) {
+    root_region = sibling;
+    return;
+  }
+  if (regions[grandparent].child0 == parent)
+    regions[grandparent].child0 = sibling;
+  else if (regions[grandparent].child1 == parent)
+    regions[grandparent].child1 = sibling;
+  else {
+    printf("ERROR: Corrupted region tree\n");
+    abort();
+  }
+  refresh_layout();
+}
 static void handle_map_notify(xcb_map_notify_event_t *event) { }
 static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
 static void handle_reparent_notify(xcb_reparent_notify_event_t *event) { }
@@ -386,6 +521,7 @@ static void handle_map_request(xcb_map_request_event_t *event) {
 }
 static void handle_configure_request(xcb_configure_request_event_t *event) {
   printf("INFO: processing configure request\n");
+  /* TODO: remove from region tree (allow floating) */
 
   uint32_t value_list[7];
   uint8_t num_values = 0;
@@ -432,10 +568,15 @@ static void handle_key_press(xcb_key_press_event_t *event) {
     char *args[] = { "dmenu_run", "-m", "0", NULL };
     if (!fork()) execvp(args[0], args);
   }
-
-  if (keysym == XKB_KEY_Return && (event->state & XCB_MOD_MASK_1)) {
+  if (keysym == XKB_KEY_Up && (event->state & XCB_MOD_MASK_1)) {
     char *args[] = { "st", NULL };
     if (!fork()) execvp(args[0], args);
+    next_direction = DIR_VERTICAL;
+  }
+  if (keysym == XKB_KEY_Right && (event->state & XCB_MOD_MASK_1)) {
+    char *args[] = { "st", NULL };
+    if (!fork()) execvp(args[0], args);
+    next_direction = DIR_HORIZONTAL;
   }
 }
 static void handle_key_release(xcb_key_release_event_t *event) { }
