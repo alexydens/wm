@@ -32,6 +32,14 @@ SOFTWARE.
 #include <xcb/xcb.h>
 #include <xkbcommon/xkbcommon.h>
 
+/* Window structure */
+typedef struct {
+  xcb_window_t handle;
+  void *parent;
+  void *child;
+  enum { LEFT, RIGHT, UP, DOWN } direction;
+} window_t;
+
 /* Global state */
 static bool running = false;
 static xcb_connection_t *connection = NULL;
@@ -44,8 +52,23 @@ static xcb_atom_t WM_DELETE_WINDOW = 0;
 static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
+#define MAX_WINDOWS 100
+static window_t windows[MAX_WINDOWS];
 
-/* Function declaractions */
+/* Helper function declaractions */
+static void connect(void);
+static void get_setup_info(void);
+static void get_screen_and_root(void);
+static void get_atoms(void);
+static void set_event_mask(void);
+static void init_xkb(void);
+static void grab_keys(void);
+static void create_cursor(void);
+static void cleanup(void);
+static void send_wm_event(xcb_atom_t atom, xcb_window_t window);
+static void refresh_layout(void);
+static xcb_window_t get_focused_window(void);
+/* Event handler declaractions */
 static void handle_create_notify(xcb_create_notify_event_t *event);
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event);
 static void handle_map_notify(xcb_map_notify_event_t *event);
@@ -61,159 +84,14 @@ static void handle_key_release(xcb_key_release_event_t *event);
 
 /* Entry point */
 int main(int argc, char *argv[]) {
-  /* Variables */
-  xcb_generic_error_t *error = NULL;
-  xcb_void_cookie_t void_cookie;
-
-  /* Connect to X server */
-  connection = xcb_connect(NULL, NULL);
-  int connection_error = xcb_connection_has_error(connection);
-  if (connection_error) {
-    printf("ERROR: Failed to connect to X server (%d)\n", connection_error);
-    xcb_disconnect(connection);
-    abort();
-  }
-
-  /* Get conenection setup info */
-  setup = xcb_get_setup(connection);
-  printf(
-      "INFO: setup.protocol_major_version = %d\n",
-      setup->protocol_major_version
-  );
-  printf(
-      "INFO: setup.protocol_minor_version = %d\n",
-      setup->protocol_minor_version
-  );
-  if (!setup) {
-    printf("ERROR: Failed to get setup information from XCB connection\n");
-    abort();
-  }
-
-  /* Get the first screen */
-  xcb_screen_iterator_t screen_iterator = xcb_setup_roots_iterator(setup);
-  screen = screen_iterator.data;
-  printf(
-      "INFO: screen.width_in_millimeters = %d\n",
-      screen->width_in_millimeters
-  );
-  printf(
-      "INFO: screen.height_in_millimeters = %d\n",
-      screen->height_in_millimeters
-  );
-  printf("INFO: screen.width_in_pixels = %d\n", screen->width_in_pixels);
-  printf("INFO: screen.height_in_pixels = %d\n", screen->height_in_pixels);
-
-  /* Get the root window */
-  root = screen->root;
-
-  /* Get some atoms */
-  xcb_intern_atom_cookie_t atom_cookie;
-  xcb_intern_atom_reply_t *atom_reply = NULL;
-#define GET_ATOM(name, var)\
-  atom_cookie = xcb_intern_atom(\
-      connection,\
-      0,\
-      strlen(name), name\
-  );\
-  atom_reply = xcb_intern_atom_reply(\
-      connection, atom_cookie, &error\
-  );\
-  if (!atom_reply) {\
-    if (error)\
-      printf(\
-          "ERROR: Failed to get atom: %s (%d)\n", name, error->error_code\
-      );\
-    else\
-      printf("ERROR: Failed to get atom: %s (no generic error)\n", name);\
-    abort();\
-  }\
-  var = atom_reply->atom;\
-  free(atom_reply);
-  GET_ATOM("WM_PROTOCOLS", WM_PROTOCOLS);
-  GET_ATOM("WM_TAKE_FOCUS", WM_TAKE_FOCUS);
-  GET_ATOM("WM_DELETE_WINDOW", WM_DELETE_WINDOW);
-
-  /* Set the event mask */
-  uint32_t event_mask[] = {
-    XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
-    | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
-    | XCB_EVENT_MASK_KEY_PRESS
-    | XCB_EVENT_MASK_KEY_RELEASE
-  };
-  void_cookie = xcb_change_window_attributes(
-      connection, root,
-      XCB_CW_EVENT_MASK, event_mask
-  );
-  error = xcb_request_check(connection, void_cookie);
-  if (error) {
-    printf(
-        "ERROR: Failed to change root window event mask (%d)\n",
-        error->error_code
-    );
-    free(error);
-    abort();
-  }
-
-  /* XKB setup for keyboard input */
-  xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-  xkb_keymap = xkb_keymap_new_from_names(
-      xkb_context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS
-  );
-  xkb_state = xkb_state_new(xkb_keymap);
-  
-  /* Grab keys */
-  void_cookie = xcb_grab_key(
-      connection,
-      0,
-      root,
-      XCB_MOD_MASK_1, XCB_GRAB_ANY,
-      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC
-  );
-  error = xcb_request_check(connection, void_cookie);
-  if (error) {
-    printf("ERROR: Failed grab keys (%d)\n", error->error_code);
-    free(error);
-    abort();
-  }
-
-  /* Create cursor */
-  xcb_font_t cursor_font = xcb_generate_id(connection);
-  void_cookie = xcb_open_font(
-      connection, cursor_font, strlen("cursor"), "cursor"
-  );
-  error = xcb_request_check(connection, void_cookie);
-  if (error) {
-    printf("ERROR: Failed to open cursor font (%d)\n", error->error_code);
-    free(error);
-    abort();
-  }
-  xcb_cursor_t cursor = xcb_generate_id(connection);
-  void_cookie = xcb_create_glyph_cursor(
-      connection,
-      cursor,
-      cursor_font, cursor_font,
-      68, 69,
-      0, 0, 0,
-      0xffff, 0xffff, 0xffff
-  );
-  error = xcb_request_check(connection, void_cookie);
-  if (error) {
-    printf("ERROR: Failed to create cursor (%d)\n", error->error_code);
-    free(error);
-    abort();
-  }
-  uint32_t cursor_list[] = { cursor };
-  void_cookie = xcb_change_window_attributes(
-      connection, root, XCB_CW_CURSOR, cursor_list
-  );
-  error = xcb_request_check(connection, void_cookie);
-  if (error) {
-    printf("ERROR: Failed to set cursor (%d)\n", error->error_code);
-    free(error);
-    abort();
-  }
-  xcb_free_cursor(connection, cursor);
-  xcb_close_font(connection, cursor_font);
+  connect();
+  get_setup_info();
+  get_screen_and_root();
+  get_atoms();
+  set_event_mask();
+  init_xkb();
+  grab_keys();
+  create_cursor();
 
   /* Flush changes */
   xcb_flush(connection);
@@ -264,20 +142,217 @@ int main(int argc, char *argv[]) {
     }
     free(event);
   }
-
-  /* Cleanup XKB structures */
-  xkb_state_unref(xkb_state);
-  xkb_keymap_unref(xkb_keymap);
-  xkb_context_unref(xkb_context);
-  
-  /* Disconnect from X server */
-  xcb_disconnect(connection);
   return 0;
   (void)argc;
   (void)argv;
 }
 
-/* Funcion definitions */
+/* Helper function definitions */
+static void connect(void) {
+  connection = xcb_connect(NULL, NULL);
+  int connection_error = xcb_connection_has_error(connection);
+  if (connection_error) {
+    printf("ERROR: Failed to connect to X server (%d)\n", connection_error);
+    xcb_disconnect(connection);
+    abort();
+  }
+}
+static void get_setup_info(void) {
+  setup = xcb_get_setup(connection);
+  printf(
+      "INFO: setup.protocol_major_version = %d\n",
+      setup->protocol_major_version
+  );
+  printf(
+      "INFO: setup.protocol_minor_version = %d\n",
+      setup->protocol_minor_version
+  );
+  if (!setup) {
+    printf("ERROR: Failed to get setup information from XCB connection\n");
+    abort();
+  }
+}
+static void get_screen_and_root(void) {
+  xcb_screen_iterator_t screen_iterator = xcb_setup_roots_iterator(setup);
+  screen = screen_iterator.data;
+  printf(
+      "INFO: screen.width_in_millimeters = %d\n",
+      screen->width_in_millimeters
+  );
+  printf(
+      "INFO: screen.height_in_millimeters = %d\n",
+      screen->height_in_millimeters
+  );
+  printf("INFO: screen.width_in_pixels = %d\n", screen->width_in_pixels);
+  printf("INFO: screen.height_in_pixels = %d\n", screen->height_in_pixels);
+  root = screen->root;
+
+}
+static void get_atoms(void) {
+  xcb_intern_atom_cookie_t atom_cookie;
+  xcb_intern_atom_reply_t *atom_reply = NULL;
+  xcb_generic_error_t *error = NULL;
+#define GET_ATOM(name, var)\
+  atom_cookie = xcb_intern_atom(\
+      connection,\
+      0,\
+      strlen(name), name\
+  );\
+  atom_reply = xcb_intern_atom_reply(\
+      connection, atom_cookie, &error\
+  );\
+  if (!atom_reply) {\
+    if (error)\
+      printf(\
+          "ERROR: Failed to get atom: %s (%d)\n", name, error->error_code\
+      );\
+    else\
+      printf("ERROR: Failed to get atom: %s (no generic error)\n", name);\
+    abort();\
+  }\
+  var = atom_reply->atom;\
+  free(atom_reply);
+  GET_ATOM("WM_PROTOCOLS", WM_PROTOCOLS);
+  GET_ATOM("WM_TAKE_FOCUS", WM_TAKE_FOCUS);
+  GET_ATOM("WM_DELETE_WINDOW", WM_DELETE_WINDOW);
+
+}
+static void set_event_mask(void) {
+  xcb_generic_error_t *error = NULL;
+
+  uint32_t event_mask[] = {
+    XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
+    | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
+    | XCB_EVENT_MASK_KEY_PRESS
+    | XCB_EVENT_MASK_KEY_RELEASE
+  };
+  xcb_void_cookie_t cookie = xcb_change_window_attributes(
+      connection, root,
+      XCB_CW_EVENT_MASK, event_mask
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    printf(
+        "ERROR: Failed to change root window event mask (%d)\n",
+        error->error_code
+    );
+    free(error);
+    abort();
+  }
+}
+static void init_xkb(void) {
+  xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  xkb_keymap = xkb_keymap_new_from_names(
+      xkb_context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS
+  );
+  xkb_state = xkb_state_new(xkb_keymap);
+}
+static void grab_keys(void) {
+  xcb_generic_error_t *error = NULL;
+
+  xcb_void_cookie_t cookie = xcb_grab_key(
+      connection,
+      0,
+      root,
+      XCB_MOD_MASK_1, XCB_GRAB_ANY,
+      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    printf("ERROR: Failed grab keys (%d)\n", error->error_code);
+    free(error);
+    abort();
+  }
+}
+static void create_cursor(void) {
+  xcb_generic_error_t *error = NULL;
+
+  xcb_font_t cursor_font = xcb_generate_id(connection);
+  xcb_void_cookie_t cookie = xcb_open_font(
+      connection, cursor_font, strlen("cursor"), "cursor"
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    printf("ERROR: Failed to open cursor font (%d)\n", error->error_code);
+    free(error);
+    abort();
+  }
+  xcb_cursor_t cursor = xcb_generate_id(connection);
+  cookie = xcb_create_glyph_cursor(
+      connection,
+      cursor,
+      cursor_font, cursor_font,
+      68, 69,
+      0, 0, 0,
+      0xffff, 0xffff, 0xffff
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    printf("ERROR: Failed to create cursor (%d)\n", error->error_code);
+    free(error);
+    abort();
+  }
+  uint32_t cursor_list[] = { cursor };
+  cookie = xcb_change_window_attributes(
+      connection, root, XCB_CW_CURSOR, cursor_list
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    printf("ERROR: Failed to set cursor (%d)\n", error->error_code);
+    free(error);
+    abort();
+  }
+  xcb_free_cursor(connection, cursor);
+  xcb_close_font(connection, cursor_font);
+}
+static void cleanup(void) {
+  xkb_state_unref(xkb_state);
+  xkb_keymap_unref(xkb_keymap);
+  xkb_context_unref(xkb_context);
+  xcb_disconnect(connection);
+}
+static void send_wm_event(xcb_atom_t atom, xcb_window_t window) {
+  const xcb_client_message_event_t wm_event = {
+    .response_type = XCB_CLIENT_MESSAGE,
+    .format = 32,
+    .window = window,
+    .type = WM_PROTOCOLS,
+    .data.data32 = { atom, XCB_CURRENT_TIME, 0, 0, 0 }
+  };
+  xcb_void_cookie_t cookie = xcb_send_event(
+      connection,
+      0, window,
+      XCB_EVENT_MASK_NO_EVENT,
+      (const char *)&wm_event
+  );
+  xcb_generic_error_t *error = xcb_request_check(connection, cookie);
+  if (error) {
+    printf(
+        "ERROR: Failed to send WM_TAKE_FOCUS event (%d)\n",
+        error->error_code
+    );
+    free(error);
+  }
+}
+static void refresh_layout(void);
+static xcb_window_t get_focused_window(void) {
+  xcb_generic_error_t *error = NULL;
+  xcb_get_input_focus_cookie_t focus_cookie = xcb_get_input_focus(connection);
+  xcb_get_input_focus_reply_t *focus_reply = xcb_get_input_focus_reply(
+      connection, focus_cookie, &error
+  );
+  if (!focus_reply) {
+    if (error)
+      printf("ERROR: Failed to get focused window (%d)\n", error->error_code);
+    else
+      printf("ERROR: Failed to get focused window (no generic error)\n");
+    abort();
+  }
+  xcb_window_t window = focus_reply->focus;
+  free(focus_reply);
+  return window;
+}
+/* Event handler definitions */
 static void handle_create_notify(xcb_create_notify_event_t *event) { }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) { }
 static void handle_map_notify(xcb_map_notify_event_t *event) { }
@@ -294,27 +369,7 @@ static void handle_map_request(xcb_map_request_event_t *event) {
     printf("ERROR: Failed to map window (%d)\n", error->error_code);
     free(error);
   }
-  const xcb_client_message_event_t wm_event = {
-    .response_type = XCB_CLIENT_MESSAGE,
-    .format = 32,
-    .window = event->window,
-    .type = WM_PROTOCOLS,
-    .data.data32 = { WM_TAKE_FOCUS, XCB_CURRENT_TIME, 0, 0, 0 }
-  };
-  cookie = xcb_send_event(
-      connection,
-      0, event->window,
-      XCB_EVENT_MASK_NO_EVENT,
-      (const char *)&wm_event
-  );
-  error = xcb_request_check(connection, cookie);
-  if (error) {
-    printf(
-        "ERROR: Failed to send WM_TAKE_FOCUS event (%d)\n",
-        error->error_code
-    );
-    free(error);
-  }
+  send_wm_event(WM_TAKE_FOCUS, event->window);
   xcb_flush(connection);
 }
 static void handle_configure_request(xcb_configure_request_event_t *event) {
@@ -359,41 +414,7 @@ static void handle_key_press(xcb_key_press_event_t *event) {
     xkb_state_key_get_one_sym(xkb_state, event->detail) == XKB_KEY_q
     && (event->state & (XCB_MOD_MASK_1|XCB_MOD_MASK_SHIFT))
   ) {
-    xcb_generic_error_t *error = NULL;
-    xcb_get_input_focus_cookie_t focus_cookie = xcb_get_input_focus(connection);
-    xcb_get_input_focus_reply_t *focus_reply = xcb_get_input_focus_reply(
-        connection, focus_cookie, &error
-    );
-    if (!focus_reply) {
-      if (error)
-        printf("ERROR: Failed to get focused window (%d)\n", error->error_code);
-      else
-        printf("ERROR: Failed to get focused window (no generic error)\n");
-      abort();
-    }
-    xcb_window_t window = focus_reply->focus;
-    free(focus_reply);
-    const xcb_client_message_event_t wm_event = {
-      .response_type = XCB_CLIENT_MESSAGE,
-      .format = 32,
-      .window = window,
-      .type = WM_PROTOCOLS,
-      .data.data32 = { WM_DELETE_WINDOW, XCB_CURRENT_TIME, 0, 0, 0 }
-    };
-    xcb_void_cookie_t cookie = xcb_send_event(
-        connection,
-        0, window,
-        XCB_EVENT_MASK_NO_EVENT,
-        (const char *)&wm_event
-    );
-    error = xcb_request_check(connection, cookie);
-    if (error) {
-      printf(
-          "ERROR: Failed to send WM_DELETE_WINDOW event (%d)\n",
-          error->error_code
-      );
-      free(error);
-    }
+    send_wm_event(WM_DELETE_WINDOW, get_focused_window());
     xcb_flush(connection);
   }
   if (
