@@ -22,31 +22,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
-# Because *real programmers* make their *own* window managers.
-I wonder if I can get treesitter to highlight markdown in a c comment.
-> That was a waste of time. This has completely ruined Vim for me. Better switch
-to Emacs.
-
-> That last sentence was a joke. Do I really seem like the kind of person to use
-Emacs??!?!!!?
-## Credits
-- Wherever the XCB and XKBCOMMON docs are, saved me trawling through headers
-- I did try to look at the DWM source code, but I gave up pretty quickly. That
-being said, seeing how short it was might be the only reason I started writing
-this. I use a lot the tools from suckless software, they work pretty well, and
-are easy to understand. Definetly check them out.
-## Here are some more stable and just generally better projects I have used:
-### X:
-- i3wm
-- dwm
-### Wayland:
-- Hyprland
-### If you want a more user-friendly experience:
-- GNOME
-- KDE Plasma
-*/
-
 /* Includes */
 #include <unistd.h>
 #include <stdbool.h>
