@@ -77,7 +77,9 @@ static void change_window_rect(
     xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
 );
 static int get_empty_region(void);
-static void refresh_layout(void);
+static void refresh_layout(
+    int region, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+);
 /* Event handler declaractions */
 static void handle_create_notify(xcb_create_notify_event_t *event);
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event);
@@ -395,19 +397,44 @@ static void change_window_rect(
 }
 static int get_empty_region(void) {
   int region = -1;
-  for (int i = 0; i < MAX_REGIONS; i++)
-    if (!(regions[i].exists))
+  for (int i = 0; i < MAX_REGIONS; i++) {
+    if (!(regions[i].exists)) {
       region = i;
+      break;
+    }
+  }
   if (region < 0) {
     printf("ERROR: Too many regions\n");
     abort();
   }
   return region;
 }
-static void refresh_layout(void) {
-  if (!root_region) return;
-  int current = root_region;
-  /* TODO */
+/*
+Listen, I hate recursion as much as the next person, but the iterative
+solution here would be an absolute mess. A mess that would quite possibly
+require dynamic memory management.
+*/
+static void refresh_layout(
+    int region, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+) {
+  if (regions[region].handle) {
+    change_window_rect(
+        regions[region].handle,
+        x, y, width, height
+    );
+    return;
+  }
+  uint16_t w = width
+    * (regions[region].split == DIR_HORIZONTAL ? regions[region].factor : 1.0f);
+  uint16_t h = height
+    * (regions[region].split == DIR_VERTICAL ? regions[region].factor : 1.0f);
+  refresh_layout(region[regions].child0, x, y, w, h);
+  refresh_layout(
+      region[regions].child1,
+      x + (regions[region].split == DIR_HORIZONTAL) * w,
+      y + (regions[region].split == DIR_VERTICAL) * h,
+      w, h
+  );
 }
 /* Event handler definitions */
 static void handle_create_notify(xcb_create_notify_event_t *event) {
@@ -421,6 +448,9 @@ static void handle_create_notify(xcb_create_notify_event_t *event) {
     regions[0].split = DIR_HORIZONTAL;
     regions[0].factor = 0.0f;
     regions[0].exists = true;
+    refresh_layout(
+        root_region, 0, 0, screen->width_in_pixels, screen->height_in_pixels
+    );
     return;
   }
   int parent = -1;
@@ -429,19 +459,25 @@ static void handle_create_notify(xcb_create_notify_event_t *event) {
     if (regions[i].handle == focus)
       parent = i;
   if (parent < 0) {
-    printf("ERROR: Couldn't find parent\n");
-    abort();
+    printf("WARNING: Couldn't find focused window\n");
+    parent = root_region;
   }
   int new_region = get_empty_region();
+  regions[new_region].exists = true;
   int new_window_region = get_empty_region();
+  regions[new_window_region].exists = true;
   int grandparent = regions[parent].parent;
-  if (regions[grandparent].child0 == parent)
-    regions[grandparent].child0 = new_region;
-  else if (regions[grandparent].child1 == parent)
-    regions[grandparent].child1 = new_region;
-  else {
-    printf("ERROR: Corrupted region tree\n");
-    abort();
+  if (grandparent < 0) {
+    root_region = new_region;
+  } else {
+    if (regions[grandparent].child0 == parent)
+      regions[grandparent].child0 = new_region;
+    else if (regions[grandparent].child1 == parent)
+      regions[grandparent].child1 = new_region;
+    else {
+      printf("ERROR: Corrupted region tree\n");
+      abort();
+    }
   }
   regions[parent].parent = new_region;
   regions[new_region].handle = 0;
@@ -450,28 +486,29 @@ static void handle_create_notify(xcb_create_notify_event_t *event) {
   regions[new_region].child1 = parent;
   regions[new_region].split = next_direction;
   regions[new_region].factor = 0.5f;
-  regions[new_region].exists = true;
   regions[new_window_region].handle = event->window;
   regions[new_window_region].parent = new_region;
   regions[new_window_region].child0 = -1;
   regions[new_window_region].child1 = -1;
   regions[new_window_region].split = DIR_HORIZONTAL;
   regions[new_window_region].factor = 0.0f;
-  regions[new_window_region].exists = true;
-  refresh_layout();
+  refresh_layout(
+      root_region, 0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
 }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
+  /* TODO: Stop this from messing up the tree */
   printf("INFO: recieved destroy notify\n");
-  if (regions[root_window].handle == event->window) {
-    regions[root_window].exists = false;
-    root_window = -1;
+  if (regions[root_region].handle == event->window) {
+    regions[root_region].exists = false;
+    root_region = -1;
     return;
   }
   int deleting = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
     if (regions[i].handle == event->window)
       deleting = i;
-  if (!deleting) {
+  if (deleting < 0) {
     printf("WARNING: Destroying window not found in region tree\n");
     return;
   }
@@ -500,7 +537,9 @@ static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
     printf("ERROR: Corrupted region tree\n");
     abort();
   }
-  refresh_layout();
+  refresh_layout(
+      root_region, 0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
 }
 static void handle_map_notify(xcb_map_notify_event_t *event) { }
 static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
