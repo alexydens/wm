@@ -607,13 +607,13 @@ static void handle_key_press(xcb_key_press_event_t *event) {
     char *args[] = { "dmenu_run", "-m", "0", NULL };
     if (!fork()) execvp(args[0], args);
   }
-  if (keysym == XKB_KEY_Up && (event->state & XCB_MOD_MASK_1)) {
-    char *args[] = { "st", NULL };
+  if (keysym == XKB_KEY_k && (event->state & XCB_MOD_MASK_1)) {
+    char *args[] = { "imv", "/home/hungrygreylag/cat.jpg", "-b", "ff0000", NULL };
     if (!fork()) execvp(args[0], args);
     next_direction = DIR_VERTICAL;
   }
-  if (keysym == XKB_KEY_Right && (event->state & XCB_MOD_MASK_1)) {
-    char *args[] = { "st", NULL };
+  if (keysym == XKB_KEY_l && (event->state & XCB_MOD_MASK_1)) {
+    char *args[] = { "imv", "/home/hungrygreylag/cat.jpg", "-b", "ff00ff", NULL };
     if (!fork()) execvp(args[0], args);
     next_direction = DIR_HORIZONTAL;
   }
