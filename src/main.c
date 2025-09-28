@@ -60,6 +60,7 @@ static struct xkb_state *xkb_state = NULL;
 static region_t regions[MAX_REGIONS];
 static int root_region = -1;
 static direction_t next_direction;
+static int focus_region = -1;
 
 /* Helper function declaractions */
 static void connect(void);
@@ -440,7 +441,6 @@ static void refresh_layout(
 static void handle_create_notify(xcb_create_notify_event_t *event) {
   printf("INFO: recieved create notify\n");
   if (root_region < 0) {
-    root_region = 0;
     regions[0].handle = event->window;
     regions[0].parent = -1;
     regions[0].child0 = -1;
@@ -448,98 +448,45 @@ static void handle_create_notify(xcb_create_notify_event_t *event) {
     regions[0].split = DIR_HORIZONTAL;
     regions[0].factor = 0.0f;
     regions[0].exists = true;
-    refresh_layout(
-        root_region, 0, 0, screen->width_in_pixels, screen->height_in_pixels
-    );
+    root_region = 0;
+    focus_region = 0;
+    send_wm_event(WM_TAKE_FOCUS, regions[focus_region].handle);
     return;
-  }
-  int parent = -1;
-  xcb_window_t focus = get_focused_window();
-  for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].handle == focus)
-      parent = i;
-  if (parent < 0) {
-    printf("WARNING: Couldn't find focused window\n");
-    parent = root_region;
   }
   int new_region = get_empty_region();
   regions[new_region].exists = true;
   int new_window_region = get_empty_region();
+  int parent = regions[focus_region].parent;
   regions[new_window_region].exists = true;
-  int grandparent = regions[parent].parent;
-  if (grandparent < 0) {
-    root_region = new_region;
-  } else {
-    if (regions[grandparent].child0 == parent)
-      regions[grandparent].child0 = new_region;
-    else if (regions[grandparent].child1 == parent)
-      regions[grandparent].child1 = new_region;
+  regions[new_region].handle = 0;
+  regions[new_region].parent = parent;
+  regions[new_region].child0 = new_window_region;
+  regions[new_region].child1 = focus_region;
+  regions[new_region].split = next_direction;
+  regions[new_region].factor = 0.5f;
+  if (parent >= 0) {
+    if (regions[parent].child0 == focus_region)
+      regions[parent].child0 = new_region;
+    else if (regions[parent].child1 == focus_region)
+      regions[parent].child1 = new_region;
     else {
       printf("ERROR: Corrupted region tree\n");
       abort();
     }
   }
-  regions[parent].parent = new_region;
-  regions[new_region].handle = 0;
-  regions[new_region].parent = grandparent;
-  regions[new_region].child0 = new_window_region;
-  regions[new_region].child1 = parent;
-  regions[new_region].split = next_direction;
-  regions[new_region].factor = 0.5f;
   regions[new_window_region].handle = event->window;
   regions[new_window_region].parent = new_region;
   regions[new_window_region].child0 = -1;
   regions[new_window_region].child1 = -1;
-  regions[new_window_region].split = DIR_HORIZONTAL;
-  regions[new_window_region].factor = 0.0f;
+  regions[new_region].split = DIR_HORIZONTAL;
+  regions[new_region].factor = 0.0f;
   refresh_layout(
-      root_region, 0, 0, screen->width_in_pixels, screen->height_in_pixels
+      root_region,
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
-  /* TODO: Stop this from messing up the tree */
   printf("INFO: recieved destroy notify\n");
-  if (regions[root_region].handle == event->window) {
-    regions[root_region].exists = false;
-    root_region = -1;
-    return;
-  }
-  int deleting = -1;
-  for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].handle == event->window)
-      deleting = i;
-  if (deleting < 0) {
-    printf("WARNING: Destroying window not found in region tree\n");
-    return;
-  }
-  int parent = regions[deleting].parent;
-  int grandparent = regions[parent].parent;
-  int sibling = -1;
-  if (regions[parent].child0 == deleting)
-    sibling = regions[parent].child1;
-  else if (regions[parent].child1 == deleting)
-    sibling = regions[parent].child0;
-  else {
-    printf("ERROR: Corrupted region tree\n");
-    abort();
-  }
-  regions[deleting].exists = false;
-  regions[parent].exists = false;
-  if (grandparent < 0) {
-    root_region = sibling;
-    return;
-  }
-  if (regions[grandparent].child0 == parent)
-    regions[grandparent].child0 = sibling;
-  else if (regions[grandparent].child1 == parent)
-    regions[grandparent].child1 = sibling;
-  else {
-    printf("ERROR: Corrupted region tree\n");
-    abort();
-  }
-  refresh_layout(
-      root_region, 0, 0, screen->width_in_pixels, screen->height_in_pixels
-  );
 }
 static void handle_map_notify(xcb_map_notify_event_t *event) { }
 static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
@@ -555,7 +502,6 @@ static void handle_map_request(xcb_map_request_event_t *event) {
     printf("ERROR: Failed to map window (%d)\n", error->error_code);
     free(error);
   }
-  send_wm_event(WM_TAKE_FOCUS, event->window);
   xcb_flush(connection);
 }
 static void handle_configure_request(xcb_configure_request_event_t *event) {
@@ -616,6 +562,18 @@ static void handle_key_press(xcb_key_press_event_t *event) {
     char *args[] = { "imv", "/home/hungrygreylag/cat.jpg", "-b", "ff00ff", NULL };
     if (!fork()) execvp(args[0], args);
     next_direction = DIR_HORIZONTAL;
+  }
+  if (
+    keysym == XKB_KEY_n && (event->state & XCB_MOD_MASK_1)
+    && focus_region >= 0
+  ) {
+    for (int i = 0;; i = (i+1)%MAX_REGIONS) {
+      if (regions[i].exists && regions[i].handle != 0) {
+        focus_region = i;
+        send_wm_event(WM_TAKE_FOCUS, regions[focus_region].handle);
+        break;
+      }
+    }
   }
 }
 static void handle_key_release(xcb_key_release_event_t *event) { }
