@@ -1,7 +1,7 @@
 # TODO
 ## Events
-- [ ] process create notify
-- [ ] process destroy notify
+- [x] process create notify
+- [x] process destroy notify
 - [ ] process map notify
 - [ ] process unmap notify
 - [ ] process reparent notify
@@ -14,13 +14,13 @@
 - [ ] process key release
 ## `WM_...`
 - [ ] `WM_PROTOCOLS`
-- [ ] `WM_DELETE_WINDOW`
-- [ ] `WM_TAKE_FOCUS`
+- [x] `WM_DELETE_WINDOW`
+- [x] `WM_TAKE_FOCUS`
 - [ ] `WM_NAME`
 ## Misc
 - [ ] check that another window manager isn't already running
 - [ ] take control of all non-wm windows when wm starts
-- [ ] tiling creation
+- [x] tiling creation
 - [ ] workspaces
 - [ ] moving focus between windows in the same workspace
 - [ ] moving focus between workspaces
