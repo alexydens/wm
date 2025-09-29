@@ -62,10 +62,10 @@ static xcb_atom_t _NET_WM_WINDOW_TYPE = 0;
 static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
+static xcb_window_t focus_window = 0;
 /* For tiling */
 static region_t regions[MAX_REGIONS];
 static int root_region = -1;
-static int focus_region = -1;
 
 /* Helper function declaractions */
 static void connect(void);
@@ -78,7 +78,9 @@ static void grab_keys(void);
 static void create_cursor(void);
 static void cleanup(void);
 static void send_wm_event(xcb_atom_t atom, xcb_window_t window);
-static void set_focus(int region);
+static void set_focus(xcb_window_t window);
+static void set_focus_region(int region);
+static int get_focus_region(void);
 static void change_window_rect(
     xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
 );
@@ -87,7 +89,7 @@ static void refresh_layout(
     int region, uint16_t x, uint16_t y, uint16_t width, uint16_t height
 );
 static void add_region(xcb_window_t window);
-static void remove_region(xcb_window_t window);
+static void remove_region(int region);
 /* Event handler declaractions */
 static void handle_create_notify(xcb_create_notify_event_t *event);
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event);
@@ -101,6 +103,8 @@ static void handle_configure_request(xcb_configure_request_event_t *event);
 static void handle_circulate_request(xcb_circulate_request_event_t *event);
 static void handle_key_press(xcb_key_press_event_t *event);
 static void handle_key_release(xcb_key_release_event_t *event);
+static void handle_focus_in(xcb_focus_in_event_t *event);
+static void handle_focus_out(xcb_focus_out_event_t *event);
 
 /* Entry point */
 int main(int argc, char *argv[]) {
@@ -168,6 +172,12 @@ int main(int argc, char *argv[]) {
         break;
       case XCB_KEY_RELEASE:
         handle_key_release((xcb_key_release_event_t *)event);
+        break;
+      case XCB_FOCUS_IN:
+        handle_focus_in((xcb_focus_in_event_t *)event);
+        break;
+      case XCB_FOCUS_OUT:
+        handle_focus_out((xcb_focus_out_event_t *)event);
         break;
       default: /* Ignore unknown events */
         break;
@@ -261,6 +271,7 @@ static void set_event_mask(void) {
     | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
     | XCB_EVENT_MASK_KEY_PRESS
     | XCB_EVENT_MASK_KEY_RELEASE
+    | XCB_EVENT_MASK_FOCUS_CHANGE
   };
   xcb_void_cookie_t cookie = xcb_change_window_attributes(
       connection, root,
@@ -370,14 +381,12 @@ static void send_wm_event(xcb_atom_t atom, xcb_window_t window) {
     free(error);
   }
 }
-static void set_focus(int region) {
-  focus_region = region;
-  if (focus_region < 0) return;
-  send_wm_event(WM_TAKE_FOCUS, regions[region].handle);
+static void set_focus(xcb_window_t window) {
+  send_wm_event(WM_TAKE_FOCUS, window);
   xcb_void_cookie_t cookie = xcb_set_input_focus(
       connection,
-      XCB_INPUT_FOCUS_PARENT,
-      regions[region].handle,
+      XCB_INPUT_FOCUS_POINTER_ROOT,
+      window,
       XCB_CURRENT_TIME
   );
   xcb_generic_error_t *error = xcb_request_check(connection, cookie);
@@ -386,6 +395,37 @@ static void set_focus(int region) {
     free(error);
   }
   xcb_flush(connection);
+}
+static xcb_window_t get_focus(void) {
+  xcb_generic_error_t *error = NULL;
+  xcb_get_input_focus_cookie_t cookie = xcb_get_input_focus(connection);
+  xcb_get_input_focus_reply_t *reply = xcb_get_input_focus_reply(
+      connection, cookie, &error
+  );
+  if (!reply) {
+    if (error)
+      printf("ERROR: Failed to get input focus (%d)\n", error->error_code);
+    else
+      printf("ERROR: Failed to get input focus (no generic error)\n");
+    abort();
+  }
+  xcb_window_t window = reply->focus;
+  free(reply);
+  return window;
+}
+static void set_focus_region(int region) {
+  set_focus(regions[region].handle);
+}
+static int get_focus_region(void) {
+  xcb_window_t focus = get_focus();
+  printf("INFO: Focus region: %d\n", (int)focus);
+  int focus_region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].handle == focus)
+      focus = i;
+  if (focus_region < 0)
+    printf("WARNING: Couldn't find input focus in region tree\n");
+  return focus_region;
 }
 static void change_window_rect(
     xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
@@ -457,14 +497,15 @@ static void add_region(xcb_window_t window) {
     regions[0].factor = 0.0f;
     regions[0].exists = true;
     root_region = 0;
-    set_focus(0);
-    send_wm_event(WM_TAKE_FOCUS, regions[focus_region].handle);
+    //set_focus_region(0);
     refresh_layout(
         root_region,
         0, 0, screen->width_in_pixels, screen->height_in_pixels
     );
     return;
   }
+  int focus_region = get_focus_region();
+  if (focus_region < 0) focus_region = root_region;
   int new_region = get_empty_region();
   regions[new_region].exists = true;
   int new_window_region = get_empty_region();
@@ -494,42 +535,35 @@ static void add_region(xcb_window_t window) {
   regions[new_window_region].child1 = -1;
   regions[new_window_region].split = DIR_HORIZONTAL;
   regions[new_window_region].factor = 0.0f;
-  set_focus(new_window_region);
+  //set_focus_region(new_window_region);
   refresh_layout(
       root_region,
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
-static void remove_region(xcb_window_t window) {
-  int old_region = -1;
-  for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].exists && (regions[i].handle == window))
-      old_region = i;
-  if (old_region < 0)
-    printf("WARNING: Recieved destroy notify for window not in region tree\n");
-  regions[old_region].exists = false;
-  int parent = regions[old_region].parent;
+static void remove_region(int region) {
+  regions[region].exists = false;
+  int parent = regions[region].parent;
   if (parent < 0) {
-    if (old_region != root_region) {
+    if (region != root_region) {
       printf("ERROR: Corrupted region tree\n");
       abort();
     }
     root_region = -1;
-    set_focus(-1);
     regions[root_region].exists = false;
     return;
   }
   regions[parent].exists = false;
   int sibling = -1;
-  if (regions[parent].child0 == old_region)
+  if (regions[parent].child0 == region)
     sibling = regions[parent].child1;
-  else if (regions[parent].child1 == old_region)
+  else if (regions[parent].child1 == region)
     sibling = regions[parent].child0;
   else {
     printf("ERROR: Corrupted region tree\n");
     abort();
   }
-  set_focus(sibling);
+  //set_focus_region(sibling);
   int grandparent = regions[parent].parent;
   if (grandparent < 0) {
     root_region = sibling;
@@ -573,11 +607,18 @@ static void handle_create_notify(xcb_create_notify_event_t *event) {
     abort();
   }
   if (attributes->override_redirect) return;
+  free(attributes);
   add_region(event->window);
 }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
   printf("INFO: recieved destroy notify\n");
-  remove_region(event->window);
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].exists && (regions[i].handle == event->window))
+      region = i;
+  if (region < 0)
+    printf("WARNING: Recieved destroy notify for window not in region tree\n");
+  remove_region(region);
 }
 static void handle_map_notify(xcb_map_notify_event_t *event) { }
 static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
@@ -636,7 +677,7 @@ static void handle_key_press(xcb_key_press_event_t *event) {
     keysym == XKB_KEY_q
     && (event->state & (XCB_MOD_MASK_1|XCB_MOD_MASK_SHIFT))
   ) {
-    send_wm_event(WM_DELETE_WINDOW, regions[focus_region].handle);
+    send_wm_event(WM_DELETE_WINDOW, focus_window);
     xcb_flush(connection);
   }
   if (keysym == XKB_KEY_d && (event->state & XCB_MOD_MASK_1)) {
@@ -648,48 +689,60 @@ static void handle_key_press(xcb_key_press_event_t *event) {
     if (!fork()) execvp(args[0], args);
   }
   if (keysym == XKB_KEY_k && (event->state & XCB_MOD_MASK_1)) {
-    int parent = regions[focus_region].parent;
-    if (parent >= 0) {
-      if (regions[parent].split == DIR_HORIZONTAL)
-        regions[parent].split = DIR_VERTICAL;
-      else
-        regions[parent].split = DIR_HORIZONTAL;
+    int focus_region = get_focus_region();
+    if (focus_region >= 0) {
+      int parent = regions[focus_region].parent;
+      if (parent >= 0) {
+        if (regions[parent].split == DIR_HORIZONTAL)
+          regions[parent].split = DIR_VERTICAL;
+        else
+          regions[parent].split = DIR_HORIZONTAL;
+      }
+      refresh_layout(
+          root_region,
+          0, 0, screen->width_in_pixels, screen->height_in_pixels
+      );
     }
-    refresh_layout(
-        root_region,
-        0, 0, screen->width_in_pixels, screen->height_in_pixels
-    );
   }
   if (keysym == XKB_KEY_l && (event->state & XCB_MOD_MASK_1)) {
-    int parent = regions[focus_region].parent;
-    if (parent >= 0) regions[parent].factor += RESIZE_FACTOR;
-    if (regions[parent].factor > (1.0f-RESIZE_FACTOR))
-      regions[parent].factor = (1.0f-RESIZE_FACTOR);
-    refresh_layout(
-        root_region,
-        0, 0, screen->width_in_pixels, screen->height_in_pixels
-    );
+    int focus_region = get_focus_region();
+    if (focus_region >= 0) {
+      int parent = regions[focus_region].parent;
+      if (parent >= 0) regions[parent].factor += RESIZE_FACTOR;
+      if (regions[parent].factor > (1.0f-RESIZE_FACTOR))
+        regions[parent].factor = (1.0f-RESIZE_FACTOR);
+      refresh_layout(
+          root_region,
+          0, 0, screen->width_in_pixels, screen->height_in_pixels
+      );
+    }
   }
   if (keysym == XKB_KEY_h && (event->state & XCB_MOD_MASK_1)) {
-    int parent = regions[focus_region].parent;
-    if (parent >= 0) regions[parent].factor -= RESIZE_FACTOR;
-    if (regions[parent].factor < RESIZE_FACTOR)
-      regions[parent].factor = RESIZE_FACTOR;
-    refresh_layout(
-        root_region,
-        0, 0, screen->width_in_pixels, screen->height_in_pixels
-    );
+    int focus_region = get_focus_region();
+    if (focus_region >= 0) {
+      int parent = regions[focus_region].parent;
+      if (parent >= 0) regions[parent].factor -= RESIZE_FACTOR;
+      if (regions[parent].factor < RESIZE_FACTOR)
+        regions[parent].factor = RESIZE_FACTOR;
+      refresh_layout(
+          root_region,
+          0, 0, screen->width_in_pixels, screen->height_in_pixels
+      );
+    }
   }
   if (
     keysym == XKB_KEY_n && (event->state & XCB_MOD_MASK_1)
-    && focus_region >= 0
   ) {
-    for (int i = focus_region+1;; i = (i+1)%MAX_REGIONS) {
+    for (int i = get_focus_region()+1;; i = (i+1)%MAX_REGIONS) {
       if (regions[i].exists && regions[i].handle) {
-        set_focus(i);
+        set_focus_region(i);
         break;
       }
     }
   }
 }
 static void handle_key_release(xcb_key_release_event_t *event) { }
+static void handle_focus_in(xcb_focus_in_event_t *event) {
+  focus_window = event->event;
+}
+static void handle_focus_out(xcb_focus_out_event_t *event) { }
