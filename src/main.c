@@ -49,21 +49,21 @@ typedef struct {
   void (*handler)(xcb_key_press_event_t *event);
 } keymap_t;
 
-/* Shortcut handler declaractions */
-static void handle_shortcut_quit(xcb_key_press_event_t *event);
-static void handle_shortcut_close(xcb_key_press_event_t *event);
-static void handle_shortcut_terminal(xcb_key_press_event_t *event);
-static void handle_shortcut_dmenu(xcb_key_press_event_t *event);
+/* Keymap handler declaractions */
+static void handle_keymap_quit(xcb_key_press_event_t *event);
+static void handle_keymap_close(xcb_key_press_event_t *event);
+static void handle_keymap_terminal(xcb_key_press_event_t *event);
+static void handle_keymap_dmenu(xcb_key_press_event_t *event);
 
 /* Settings */
 #define ANSI_LOGS 1
 #define MOD1 XCB_MOD_MASK_1
 #define SHIFT XCB_MOD_MASK_SHIFT
 const keymap_t KEYMAPS[] = {
-  { MOD1|SHIFT, XKB_KEY_c, handle_shortcut_quit },
-  { MOD1|SHIFT, XKB_KEY_q, handle_shortcut_close },
-  { MOD1, XKB_KEY_Return, handle_shortcut_terminal },
-  { MOD1, XKB_KEY_d, handle_shortcut_dmenu },
+  { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit },
+  { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close },
+  { MOD1, XKB_KEY_Return, handle_keymap_terminal },
+  { MOD1, XKB_KEY_d, handle_keymap_dmenu },
 };
 #define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 
@@ -108,7 +108,7 @@ static void get_setup_info(void);
 static xcb_atom_t get_atom(const char *name);
 static void set_event_mask(xcb_window_t window, uint32_t event_mask);
 static void init_xkb(void);
-static void grab_keys(void);
+static void grab_keymap(uint16_t modifiers, xkb_keysym_t keysym);
 
 /* Event handler declaractions */
 #define DECLARE_HANDLER(event, ident)\
@@ -171,7 +171,8 @@ int main(int argc, char *argv[]) {
       | XCB_EVENT_MASK_FOCUS_CHANGE
   );
   init_xkb();
-  grab_keys();
+  for (int i = 0; i < NUM_KEYMAPS; i++)
+    grab_keymap(KEYMAPS[i].modifiers, KEYMAPS[i].keysym);
 
   /* Event loop */
   log_msg(LOG_LEVEL_INFO, "Processing events...");
@@ -191,11 +192,11 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
-/* Shortcut handler definitions */
-static void handle_shortcut_quit(xcb_key_press_event_t *event) {
+/* Keymap handler definitions */
+static void handle_keymap_quit(xcb_key_press_event_t *event) {
   running = false;
 }
-static void handle_shortcut_close(xcb_key_press_event_t *event) {
+static void handle_keymap_close(xcb_key_press_event_t *event) {
   xcb_generic_error_t *error = NULL;
   const xcb_client_message_event_t wm_event = {
     .response_type = XCB_CLIENT_MESSAGE,
@@ -220,11 +221,11 @@ static void handle_shortcut_close(xcb_key_press_event_t *event) {
     );
   }
 }
-static void handle_shortcut_terminal(xcb_key_press_event_t *event) {
+static void handle_keymap_terminal(xcb_key_press_event_t *event) {
   char *argv[] = { "st", NULL };
   spawn_process_quiet(argv);
 }
-static void handle_shortcut_dmenu(xcb_key_press_event_t *event) {
+static void handle_keymap_dmenu(xcb_key_press_event_t *event) {
   char *argv[] = { "dmenu_run", "-m", "0", NULL };
   spawn_process_quiet(argv);
 }
@@ -357,15 +358,49 @@ static void init_xkb(void) {
   );
   xkb_state = xkb_state_new(xkb_keymap);
 }
-static void grab_keys(void) {
-  /* TODO: Make this function take in a specific key combination and grab it */
-  xcb_generic_error_t *error = NULL;
+static void grab_keymap(uint16_t modifiers, xkb_keysym_t keysym) {
+  char keyname[64];
+  if (xkb_keysym_get_name(keysym, keyname, sizeof(keyname)) < 0)
+    memcpy(keyname, "???\0", 4);
+  log_msg(
+      LOG_LEVEL_INFO,
+      "Grabbing combination %s%s%s%s%s%s%s%s%s",
+      modifiers & XCB_MOD_MASK_SHIFT ? "Shift+" : "",
+      modifiers & XCB_MOD_MASK_LOCK ? "Capslock+" : "",
+      modifiers & XCB_MOD_MASK_CONTROL ? "Ctrl+" : "",
+      modifiers & XCB_MOD_MASK_1 ? "Alt+" : "",
+      modifiers & XCB_MOD_MASK_2 ? "Numlock+" : "",
+      modifiers & XCB_MOD_MASK_3 ? "Mod3+" : "",
+      modifiers & XCB_MOD_MASK_4 ? "Super+" : "",
+      modifiers & XCB_MOD_MASK_5 ? "AltGr+" : "",
+      keyname
+  );
+    
+  xkb_keycode_t xkb_keycode;
+  xkb_keycode_t min = xkb_keymap_min_keycode(xkb_keymap);
+  xkb_keycode_t max = xkb_keymap_max_keycode(xkb_keymap);
+  bool found = false;
+  for (xkb_keycode_t i = min; i <= max; i++) {
+    int num_keysyms;
+    const xkb_keysym_t *keysyms;
+    num_keysyms =
+      xkb_keymap_key_get_syms_by_level(xkb_keymap, i, 0, 0, &keysyms);
+    for (int j = 0; j < num_keysyms; j++) {
+      if (keysyms[j] == keysym) {
+        found = true;
+        xkb_keycode = i;
+      }
+    }
+  }
+  if (!found) log_msg(LOG_LEVEL_ERROR, "Couldn't find keysym %d", keysym);
 
+  xcb_keycode_t keycode = (xcb_keycode_t)xkb_keycode;
+  xcb_generic_error_t *error = NULL;
   xcb_void_cookie_t cookie = xcb_grab_key(
       connection,
       0,
       root,
-      XCB_MOD_MASK_1, XCB_GRAB_ANY,
+      modifiers, keycode,
       XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC
   );
   error = xcb_request_check(connection, cookie);
