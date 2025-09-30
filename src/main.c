@@ -33,16 +33,31 @@ SOFTWARE.
 #include <xcb/xcb.h>              /* X (windowing system) C Bindings */
 #include <xkbcommon/xkbcommon.h>  /* X KeyBoard helpers */
 
-/* Settings */
-/* Use ANSI escape codes in logs */
-#define ANSI_LOGS 1
-
 /* Log levels */
 typedef enum {
   LOG_LEVEL_INFO,
   LOG_LEVEL_WARNING,
   LOG_LEVEL_ERROR
 } log_level_t;
+
+/* Keymap */
+typedef struct {
+  uint16_t modifiers;
+  xkb_keysym_t keysym;
+  void (*handler)(xcb_key_press_event_t *event);
+} keymap_t;
+
+/* Shortcut handler declaractions */
+static void handle_shortcut_quit(xcb_key_press_event_t *event);
+
+/* Settings */
+#define ANSI_LOGS 1
+#define MOD1 XCB_MOD_MASK_1
+#define SHIFT XCB_MOD_MASK_SHIFT
+const keymap_t KEYMAPS[] = {
+  { MOD1|SHIFT, XKB_KEY_c, handle_shortcut_quit }
+};
+#define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 
 /* Constants */
 const char *LOG_LEVELS[] = {
@@ -71,6 +86,9 @@ static xcb_atom_t WM_DELETE_WINDOW = 0;
 static xcb_atom_t WM_CLASS = 0;
 static xcb_atom_t WM_TRANSIENT_FOR = 0;
 static xcb_atom_t _NET_WM_WINDOW_TYPE = 0;
+static struct xkb_context *xkb_context = NULL;
+static struct xkb_keymap *xkb_keymap = NULL;
+static struct xkb_state *xkb_state = NULL;
 
 /* Helper function declaractions */
 static void log_msg(log_level_t level, const char *format, ...)
@@ -80,6 +98,8 @@ static void cleanup(void);
 static void get_setup_info(void);
 static xcb_atom_t get_atom(const char *name);
 static void set_event_mask(xcb_window_t window, uint32_t event_mask);
+static void init_xkb(void);
+static void grab_keys(void);
 
 /* Event handler declaractions */
 #define DECLARE_HANDLER(event, ident)\
@@ -141,6 +161,8 @@ int main(int argc, char *argv[]) {
       | XCB_EVENT_MASK_KEY_RELEASE
       | XCB_EVENT_MASK_FOCUS_CHANGE
   );
+  init_xkb();
+  grab_keys();
 
   /* Event loop */
   log_msg(LOG_LEVEL_INFO, "Processing events...");
@@ -182,6 +204,9 @@ static void connect(void) {
   }
 }
 static void cleanup(void) {
+  xkb_state_unref(xkb_state);
+  xkb_keymap_unref(xkb_keymap);
+  xkb_context_unref(xkb_context);
   xcb_disconnect(connection);
 }
 static void get_setup_info(void) {
@@ -263,6 +288,32 @@ static void set_event_mask(xcb_window_t window, uint32_t event_mask) {
     );
   }
 }
+static void init_xkb(void) {
+  xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  xkb_keymap = xkb_keymap_new_from_names(
+      xkb_context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS
+  );
+  xkb_state = xkb_state_new(xkb_keymap);
+}
+static void grab_keys(void) {
+  /* TODO: Make this function take in a specific key combination and grab it */
+  xcb_generic_error_t *error = NULL;
+
+  xcb_void_cookie_t cookie = xcb_grab_key(
+      connection,
+      0,
+      root,
+      XCB_MOD_MASK_1, XCB_GRAB_ANY,
+      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    int error_code = error->error_code;
+    free(error);
+    log_msg(LOG_LEVEL_ERROR, "Failed to grab keys: (%d)", error_code
+    );
+  }
+}
 
 /* Event handler definitions */
 static void handle_create_notify(xcb_create_notify_event_t *event) { }
@@ -275,7 +326,17 @@ static void handle_gravity_notify(xcb_gravity_notify_event_t *event) { }
 static void handle_map_request(xcb_map_request_event_t *event) { }
 static void handle_configure_request(xcb_configure_request_event_t *event) { }
 static void handle_circulate_request(xcb_circulate_request_event_t *event) { }
-static void handle_key_press(xcb_key_press_event_t *event) { }
+static void handle_key_press(xcb_key_press_event_t *event) {
+  xkb_keysym_t keysym = xkb_state_key_get_one_sym(xkb_state, event->detail);
+  for (int i = 0; i < NUM_KEYMAPS; i++)
+    if ((event->state & KEYMAPS[i].modifiers) && keysym == KEYMAPS[i].keysym)
+      KEYMAPS[i].handler(event);
+}
 static void handle_key_release(xcb_key_release_event_t *event) { }
 static void handle_focus_in(xcb_focus_in_event_t *event) { }
 static void handle_focus_out(xcb_focus_out_event_t *event) { }
+
+/* Shortcut handler declaractions */
+static void handle_shortcut_quit(xcb_key_press_event_t *event) {
+  running = false;
+}
