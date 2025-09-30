@@ -24,7 +24,7 @@ SOFTWARE.
 
 /* Includes */
 #include <unistd.h>               /* For execvp() */
-#include <stdbool.h>              /* For bools */
+#include <stdbool.h>              /* For booleans */
 #include <stdint.h>               /* For fixed-size integers */
 #include <stdarg.h>               /* For variadic arguments */
 #include <stdlib.h>               /* For free() and abort() */
@@ -61,10 +61,26 @@ const char *LOG_LEVELS[] = {
 
 /* Global state */
 static bool running = false;
+static xcb_connection_t *connection = NULL;
+static const xcb_setup_t *setup = NULL;
+static xcb_screen_t *screen = NULL;
+static xcb_window_t root = 0;
+static xcb_atom_t WM_PROTOCOLS = 0;
+static xcb_atom_t WM_TAKE_FOCUS = 0;
+static xcb_atom_t WM_DELETE_WINDOW = 0;
+static xcb_atom_t WM_CLASS = 0;
+static xcb_atom_t WM_TRANSIENT_FOR = 0;
+static xcb_atom_t _NET_WM_WINDOW_TYPE = 0;
 
 /* Helper function declaractions */
 static void log_msg(log_level_t level, const char *format, ...)
     __attribute__((format(printf, 2, 3)));
+static void connect(void);
+static void cleanup(void);
+static void get_setup_info(void);
+static xcb_atom_t get_atom(const char *name);
+static void set_event_mask(xcb_window_t window, uint32_t event_mask);
+
 /* Event handler declaractions */
 #define DECLARE_HANDLER(event, ident)\
 static void handle_##ident (xcb_##ident##_event_t *event);\
@@ -107,6 +123,40 @@ static void (*EVENT_HANDLERS[])(xcb_generic_event_t *) = {
 
 /* Entry point */
 int main(int argc, char *argv[]) {
+  /* Startup */
+  log_msg(LOG_LEVEL_INFO, "Starting...");
+  connect();
+  get_setup_info();
+  WM_PROTOCOLS = get_atom("WM_PROTOCOLS");
+  WM_TAKE_FOCUS = get_atom("WM_TAKE_FOCUS");
+  WM_DELETE_WINDOW = get_atom("WM_DELETE_WINDOW");
+  WM_CLASS = get_atom("WM_CLASS");
+  WM_TRANSIENT_FOR = get_atom("WM_TRANSIENT_FOR");
+  _NET_WM_WINDOW_TYPE = get_atom("_NET_WM_WINDOW_TYPE");
+  set_event_mask(
+      root,
+      XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
+      | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY
+      | XCB_EVENT_MASK_KEY_PRESS
+      | XCB_EVENT_MASK_KEY_RELEASE
+      | XCB_EVENT_MASK_FOCUS_CHANGE
+  );
+
+  /* Event loop */
+  log_msg(LOG_LEVEL_INFO, "Processing events...");
+  running = true;
+  while (running) {
+    xcb_generic_event_t *event = xcb_wait_for_event(connection);
+    uint8_t type = event->response_type & ~0x80;
+    if (type < (sizeof(EVENT_HANDLERS)/sizeof(EVENT_HANDLERS[0])))
+      if (EVENT_HANDLERS[type])
+        EVENT_HANDLERS[type](event);
+    free(event);
+  }
+
+  /* Cleanup */
+  log_msg(LOG_LEVEL_INFO, "Cleaning up...");
+  cleanup();
   return 0;
 }
 
@@ -120,6 +170,100 @@ static void log_msg(log_level_t level, const char *format, ...) {
   fprintf(level == LOG_LEVEL_ERROR ? stderr : stdout, "\n");
   if (level == LOG_LEVEL_ERROR) abort();
 }
+static void connect(void) {
+  connection = xcb_connect(NULL, NULL);
+  int connection_error = xcb_connection_has_error(connection);
+  if (connection_error) {
+    xcb_disconnect(connection);
+    log_msg(
+        LOG_LEVEL_ERROR,
+        "Failed to connect to X server (%d)", connection_error
+    );
+  }
+}
+static void cleanup(void) {
+  xcb_disconnect(connection);
+}
+static void get_setup_info(void) {
+  setup = xcb_get_setup(connection);
+  if (!setup)
+    log_msg(LOG_LEVEL_ERROR, "Failed to get setup information");
+  log_msg(
+      LOG_LEVEL_INFO, "setup.protocol_major_version = %d",
+      setup->protocol_major_version
+  );
+  log_msg(
+      LOG_LEVEL_INFO, "setup.protocol_minor_version = %d",
+      setup->protocol_minor_version
+  );
+  xcb_screen_iterator_t screen_iterator = xcb_setup_roots_iterator(setup);
+  screen = screen_iterator.data;
+  log_msg(
+      LOG_LEVEL_INFO, "screen.width_in_millimeters = %d",
+      screen->width_in_millimeters
+  );
+  log_msg(
+      LOG_LEVEL_INFO, "screen.height_in_millimeters = %d",
+      screen->height_in_millimeters
+  );
+  log_msg(
+      LOG_LEVEL_INFO, "screen.width_in_pixels = %d",
+      screen->width_in_pixels
+  );
+  log_msg(
+      LOG_LEVEL_INFO, "screen.height_in_pixels = %d",
+      screen->height_in_pixels
+  );
+  root = screen->root;
+}
+static xcb_atom_t get_atom(const char *name) {
+  /*
+  Theoretically, it would be better to send out requests for each atom,
+  and then gather all the replies, taking advantage of XCB's asynchronous
+  design. In practice, that won't save enough time to be worth the messier
+  implementation.
+  */
+  xcb_generic_error_t *error = NULL;
+  xcb_intern_atom_cookie_t cookie = xcb_intern_atom(
+      connection, 0, strlen(name), name
+  );
+  xcb_intern_atom_reply_t *reply = xcb_intern_atom_reply(
+      connection, cookie, &error
+  );
+  if (!reply) {
+    if (error)
+      log_msg(
+          LOG_LEVEL_ERROR,
+          "Failed to get atom: %s (%d)", name, error->error_code
+      );
+    else
+      log_msg(LOG_LEVEL_ERROR, "Failed to get atom: %s", name);
+  }
+  xcb_atom_t atom = reply->atom;
+  free(reply);
+  if (!atom)
+    log_msg(LOG_LEVEL_ERROR, "Failed to get atom: %s", name);
+  else
+    log_msg(LOG_LEVEL_INFO, "Got atom: %s", name);
+  return atom;
+}
+static void set_event_mask(xcb_window_t window, uint32_t event_mask) {
+  xcb_generic_error_t *error = NULL;
+  xcb_void_cookie_t cookie = xcb_change_window_attributes(
+      connection, window, XCB_CW_EVENT_MASK, &event_mask
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    int error_code = error->error_code;
+    free(error);
+    log_msg(
+        LOG_LEVEL_ERROR,
+        "Failed to change event mask of window %d (%d)",
+        (int)window, error_code
+    );
+  }
+}
+
 /* Event handler definitions */
 static void handle_create_notify(xcb_create_notify_event_t *event) { }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) { }
