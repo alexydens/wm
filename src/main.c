@@ -23,13 +23,15 @@ SOFTWARE.
 */
 
 /* Includes */
-#include <unistd.h>               /* For execvp() */
+#include <fcntl.h>                /* For open() */
+#include <unistd.h>               /* For execvp(), dup2(), close(), fork() */
 #include <stdbool.h>              /* For booleans */
 #include <stdint.h>               /* For fixed-size integers */
 #include <stdarg.h>               /* For variadic arguments */
 #include <stdlib.h>               /* For free() and abort() */
-#include <string.h>               /* For strlen() */
+#include <string.h>               /* For strlen() and strerror() */
 #include <stdio.h>                /* For console output */
+#include <errno.h>                /* For errno */
 #include <xcb/xcb.h>              /* X (windowing system) C Bindings */
 #include <xkbcommon/xkbcommon.h>  /* X KeyBoard helpers */
 
@@ -49,13 +51,19 @@ typedef struct {
 
 /* Shortcut handler declaractions */
 static void handle_shortcut_quit(xcb_key_press_event_t *event);
+static void handle_shortcut_close(xcb_key_press_event_t *event);
+static void handle_shortcut_terminal(xcb_key_press_event_t *event);
+static void handle_shortcut_dmenu(xcb_key_press_event_t *event);
 
 /* Settings */
 #define ANSI_LOGS 1
 #define MOD1 XCB_MOD_MASK_1
 #define SHIFT XCB_MOD_MASK_SHIFT
 const keymap_t KEYMAPS[] = {
-  { MOD1|SHIFT, XKB_KEY_c, handle_shortcut_quit }
+  { MOD1|SHIFT, XKB_KEY_c, handle_shortcut_quit },
+  { MOD1|SHIFT, XKB_KEY_q, handle_shortcut_close },
+  { MOD1, XKB_KEY_Return, handle_shortcut_terminal },
+  { MOD1, XKB_KEY_d, handle_shortcut_dmenu },
 };
 #define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 
@@ -93,6 +101,7 @@ static struct xkb_state *xkb_state = NULL;
 /* Helper function declaractions */
 static void log_msg(log_level_t level, const char *format, ...)
     __attribute__((format(printf, 2, 3)));
+static void spawn_process_quiet(char **argv);
 static void connect(void);
 static void cleanup(void);
 static void get_setup_info(void);
@@ -182,6 +191,44 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
+/* Shortcut handler definitions */
+static void handle_shortcut_quit(xcb_key_press_event_t *event) {
+  running = false;
+}
+static void handle_shortcut_close(xcb_key_press_event_t *event) {
+  xcb_generic_error_t *error = NULL;
+  const xcb_client_message_event_t wm_event = {
+    .response_type = XCB_CLIENT_MESSAGE,
+    .format = 32,
+    .window = event->child,
+    .type = WM_PROTOCOLS,
+    .data.data32 = { WM_DELETE_WINDOW, XCB_CURRENT_TIME, 0, 0, 0 }
+  };
+  xcb_void_cookie_t cookie = xcb_send_event(
+      connection,
+      0, event->child,
+      XCB_EVENT_MASK_NO_EVENT,
+      (const char *)&wm_event
+  );
+  error = xcb_request_check(connection, cookie);
+  if (error) {
+    int error_code = error->error_code;
+    free(error);
+    log_msg(
+        LOG_LEVEL_ERROR,
+        "Failed to send WM_DELETE_WINDOW event (%d)", error_code
+    );
+  }
+}
+static void handle_shortcut_terminal(xcb_key_press_event_t *event) {
+  char *argv[] = { "st", NULL };
+  spawn_process_quiet(argv);
+}
+static void handle_shortcut_dmenu(xcb_key_press_event_t *event) {
+  char *argv[] = { "dmenu_run", "-m", "0", NULL };
+  spawn_process_quiet(argv);
+}
+
 /* Helper function definitions */
 static void log_msg(log_level_t level, const char *format, ...) {
   fprintf(level == LOG_LEVEL_ERROR ? stderr : stdout, LOG_LEVELS[level]);
@@ -201,6 +248,21 @@ static void connect(void) {
         LOG_LEVEL_ERROR,
         "Failed to connect to X server (%d)", connection_error
     );
+  }
+}
+static void spawn_process_quiet(char **argv) {
+  if (!fork()) {
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull < 0)
+      log_msg(
+          LOG_LEVEL_ERROR,
+          "Failed to open /dev/null (%s)", strerror(errno)
+      );
+    dup2(devnull, STDOUT_FILENO);
+    dup2(devnull, STDERR_FILENO);
+    close(devnull);
+
+    execvp(argv[0], argv);
   }
 }
 static void cleanup(void) {
@@ -323,8 +385,51 @@ static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
 static void handle_reparent_notify(xcb_reparent_notify_event_t *event) { }
 static void handle_configure_notify(xcb_configure_notify_event_t *event) { }
 static void handle_gravity_notify(xcb_gravity_notify_event_t *event) { }
-static void handle_map_request(xcb_map_request_event_t *event) { }
-static void handle_configure_request(xcb_configure_request_event_t *event) { }
+static void handle_map_request(xcb_map_request_event_t *event) {
+  log_msg(LOG_LEVEL_INFO, "Processing map request...");
+  xcb_void_cookie_t cookie = xcb_map_window(connection, event->window);
+  xcb_generic_error_t *error = xcb_request_check(connection, cookie);
+  if (error) {
+    log_msg(LOG_LEVEL_ERROR, "Failed to map window (%d)", error->error_code);
+    free(error);
+  }
+  xcb_flush(connection);
+}
+static void handle_configure_request(xcb_configure_request_event_t *event) {
+  log_msg(LOG_LEVEL_INFO, "Processing configure request...");
+
+  uint32_t value_list[7];
+  uint8_t num_values = 0;
+  if (event->value_mask & XCB_CONFIG_WINDOW_X)
+    value_list[num_values++] = event->x;
+  if (event->value_mask & XCB_CONFIG_WINDOW_Y)
+    value_list[num_values++] = event->y;
+  if (event->value_mask & XCB_CONFIG_WINDOW_WIDTH)
+    value_list[num_values++] = event->width;
+  if (event->value_mask & XCB_CONFIG_WINDOW_HEIGHT)
+    value_list[num_values++] = event->height;
+  if (event->value_mask & XCB_CONFIG_WINDOW_BORDER_WIDTH)
+    value_list[num_values++] = event->border_width;
+  if (event->value_mask & XCB_CONFIG_WINDOW_SIBLING)
+    value_list[num_values++] = event->sibling;
+  if (event->value_mask & XCB_CONFIG_WINDOW_STACK_MODE)
+    value_list[num_values++] = event->stack_mode;
+
+  xcb_void_cookie_t cookie = xcb_configure_window(
+      connection, event->window,
+      event->value_mask, value_list
+  );
+  xcb_generic_error_t *error = xcb_request_check(connection, cookie);
+  if (error) {
+    log_msg(
+        LOG_LEVEL_ERROR,
+        "Failed to configure window (%d)",
+        error->error_code
+    );
+    free(error);
+  }
+  xcb_flush(connection);
+}
 static void handle_circulate_request(xcb_circulate_request_event_t *event) { }
 static void handle_key_press(xcb_key_press_event_t *event) {
   xkb_keysym_t keysym = xkb_state_key_get_one_sym(xkb_state, event->detail);
@@ -335,8 +440,3 @@ static void handle_key_press(xcb_key_press_event_t *event) {
 static void handle_key_release(xcb_key_release_event_t *event) { }
 static void handle_focus_in(xcb_focus_in_event_t *event) { }
 static void handle_focus_out(xcb_focus_out_event_t *event) { }
-
-/* Shortcut handler declaractions */
-static void handle_shortcut_quit(xcb_key_press_event_t *event) {
-  running = false;
-}
