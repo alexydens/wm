@@ -42,6 +42,17 @@ typedef enum {
   LOG_LEVEL_ERROR
 } log_level_t;
 
+/* Direction */
+typedef enum { DIR_HORIZONTAL, DIR_VERTICAL } direction_t;
+/* Region of space */
+typedef struct {
+  xcb_window_t handle;
+  int parent, child0, child1;
+  direction_t split;
+  float factor;
+  bool exists;
+} region_t;
+
 /* Keymap */
 typedef struct {
   uint16_t modifiers;
@@ -54,6 +65,7 @@ static void handle_keymap_quit(xcb_key_press_event_t *event);
 static void handle_keymap_close(xcb_key_press_event_t *event);
 static void handle_keymap_terminal(xcb_key_press_event_t *event);
 static void handle_keymap_dmenu(xcb_key_press_event_t *event);
+static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event);
 
 /* Settings */
 #define ANSI_LOGS 1
@@ -62,10 +74,12 @@ static void handle_keymap_dmenu(xcb_key_press_event_t *event);
 const keymap_t KEYMAPS[] = {
   { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit },
   { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close },
+  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir },
   { MOD1, XKB_KEY_Return, handle_keymap_terminal },
   { MOD1, XKB_KEY_d, handle_keymap_dmenu },
 };
 #define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
+#define MAX_REGIONS 100
 
 /* Constants */
 const char *LOG_LEVELS[] = {
@@ -97,6 +111,8 @@ static xcb_atom_t _NET_WM_WINDOW_TYPE = 0;
 static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
+static region_t regions[MAX_REGIONS];
+static int root_region = -1;
 
 /* Helper function declaractions */
 static void log_msg(log_level_t level, const char *format, ...)
@@ -109,6 +125,15 @@ static xcb_atom_t get_atom(const char *name);
 static void set_event_mask(xcb_window_t window, uint32_t event_mask);
 static void init_xkb(void);
 static void grab_keymap(uint16_t modifiers, xkb_keysym_t keysym);
+static void change_window_rect(
+    xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+);
+static int get_empty_region(void);
+static void refresh_layout(
+    int region, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+);
+static void add_region(xcb_window_t parent, xcb_window_t window);
+static void remove_region(int region);
 
 /* Event handler declaractions */
 #define DECLARE_HANDLER(event, ident)\
@@ -228,6 +253,23 @@ static void handle_keymap_terminal(xcb_key_press_event_t *event) {
 static void handle_keymap_dmenu(xcb_key_press_event_t *event) {
   char *argv[] = { "dmenu_run", "-m", "0", NULL };
   spawn_process_quiet(argv);
+}
+static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event) {
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].handle == event->child)
+      region = i;
+  if (region < 0) return;
+  int parent = regions[region].parent;
+  if (parent < 0) return;
+  if (regions[parent].split == DIR_HORIZONTAL)
+    regions[parent].split = DIR_VERTICAL;
+  else
+    regions[parent].split = DIR_HORIZONTAL;
+  refresh_layout(
+      root_region,
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
 }
 
 /* Helper function definitions */
@@ -411,10 +453,172 @@ static void grab_keymap(uint16_t modifiers, xkb_keysym_t keysym) {
     );
   }
 }
+static void change_window_rect(
+    xcb_window_t window, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+) {
+  uint32_t value_list[4] = { x, y, width, height };
+  xcb_void_cookie_t cookie = xcb_configure_window(
+      connection, window,
+      XCB_CONFIG_WINDOW_X
+      | XCB_CONFIG_WINDOW_Y
+      | XCB_CONFIG_WINDOW_WIDTH
+      | XCB_CONFIG_WINDOW_HEIGHT,
+      value_list
+  );
+  xcb_generic_error_t *error = xcb_request_check(connection, cookie);
+  if (error) {
+    int error_code = error->error_code;
+    free(error);
+    log_msg(LOG_LEVEL_ERROR, "Failed to configure window (%d)", error_code);
+  }
+}
+static void refresh_layout(
+    int region, uint16_t x, uint16_t y, uint16_t width, uint16_t height
+) {
+  if (regions[region].handle) {
+    change_window_rect(
+        regions[region].handle,
+        x, y, width, height
+    );
+    return;
+  }
+  uint16_t w = width
+    * (regions[region].split == DIR_HORIZONTAL ? regions[region].factor : 1.0f);
+  uint16_t h = height
+    * (regions[region].split == DIR_VERTICAL ? regions[region].factor : 1.0f);
+  refresh_layout(region[regions].child0, x, y, w, h);
+  refresh_layout(
+      region[regions].child1,
+      x + (regions[region].split == DIR_HORIZONTAL) * w,
+      y + (regions[region].split == DIR_VERTICAL) * h,
+      regions[region].split == DIR_HORIZONTAL ? (width-w) : w,
+      regions[region].split == DIR_VERTICAL ? (height-h) : h
+  );
+}
+static int get_empty_region(void) {
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++) {
+    if (!(regions[i].exists)) {
+      region = i;
+      break;
+    }
+  }
+  if (region < 0)
+    log_msg(LOG_LEVEL_ERROR, "Too many regions");
+  return region;
+}
+static void add_region(xcb_window_t parent_window, xcb_window_t window) {
+  if (root_region < 0) {
+    regions[0].handle = window;
+    regions[0].parent = -1;
+    regions[0].child0 = -1;
+    regions[0].child1 = -1;
+    regions[0].split = DIR_HORIZONTAL;
+    regions[0].factor = 0.0f;
+    regions[0].exists = true;
+    root_region = 0;
+    refresh_layout(
+        root_region,
+        0, 0, screen->width_in_pixels, screen->height_in_pixels
+    );
+    return;
+  }
+  int parent = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].handle == parent_window)
+      parent = i;
+  if (parent < 0) parent = root_region;
+  int new_region = get_empty_region();
+  regions[new_region].exists = true;
+  int new_window_region = get_empty_region();
+  regions[new_window_region].exists = true;
+  int grandparent = regions[parent].parent;
+  if (grandparent < 0) root_region = new_region;
+  regions[parent].parent = new_region;
+  regions[new_region].handle = 0;
+  regions[new_region].parent = grandparent;
+  regions[new_region].child0 = new_window_region;
+  regions[new_region].child1 = parent;
+  regions[new_region].split = DIR_HORIZONTAL;
+  regions[new_region].factor = 0.5f;
+  if (grandparent >= 0) {
+    if (regions[grandparent].child0 == parent)
+      regions[grandparent].child0 = new_region;
+    else if (regions[grandparent].child1 == parent)
+      regions[grandparent].child1 = new_region;
+    else
+      log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
+  }
+  regions[new_window_region].handle = window;
+  regions[new_window_region].parent = new_region;
+  regions[new_window_region].child0 = -1;
+  regions[new_window_region].child1 = -1;
+  regions[new_window_region].split = DIR_HORIZONTAL;
+  regions[new_window_region].factor = 0.0f;
+  refresh_layout(
+      root_region,
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
+}
+static void remove_region(int region) {
+  regions[region].exists = false;
+  int parent = regions[region].parent;
+  if (parent < 0) {
+    if (region != root_region)
+      log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
+    root_region = -1;
+    regions[root_region].exists = false;
+    return;
+  }
+  regions[parent].exists = false;
+  int sibling = -1;
+  if (regions[parent].child0 == region)
+    sibling = regions[parent].child1;
+  else if (regions[parent].child1 == region)
+    sibling = regions[parent].child0;
+  else
+    log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
+  int grandparent = regions[parent].parent;
+  if (grandparent < 0) {
+    root_region = sibling;
+    regions[sibling].parent = -1;
+    refresh_layout(
+        root_region,
+        0, 0, screen->width_in_pixels, screen->height_in_pixels
+    );
+    return;
+  }
+  regions[sibling].parent = grandparent;
+  if (regions[grandparent].child0 == parent)
+    regions[grandparent].child0 = sibling;
+  else if (regions[grandparent].child1 == parent)
+    regions[grandparent].child1 = sibling;
+  else
+    log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
+  refresh_layout(
+      root_region,
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
+}
 
 /* Event handler definitions */
-static void handle_create_notify(xcb_create_notify_event_t *event) { }
-static void handle_destroy_notify(xcb_destroy_notify_event_t *event) { }
+static void handle_create_notify(xcb_create_notify_event_t *event) {
+  log_msg(LOG_LEVEL_INFO, "Processing create notify...");
+  add_region(event->parent, event->window);
+}
+static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
+  log_msg(LOG_LEVEL_INFO, "Processing destroy notify...");
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].exists && (regions[i].handle == event->window))
+      region = i;
+  if (region < 0)
+    log_msg(
+        LOG_LEVEL_WARNING,
+        "Recieved destroy notify for window not in region tree"
+    );
+  remove_region(region);
+}
 static void handle_map_notify(xcb_map_notify_event_t *event) { }
 static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
 static void handle_reparent_notify(xcb_reparent_notify_event_t *event) { }
