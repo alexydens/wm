@@ -66,6 +66,8 @@ static void handle_keymap_close(xcb_key_press_event_t *event);
 static void handle_keymap_terminal(xcb_key_press_event_t *event);
 static void handle_keymap_dmenu(xcb_key_press_event_t *event);
 static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event);
+static void handle_keymap_incsplitfactor(xcb_key_press_event_t *event);
+static void handle_keymap_decsplitfactor(xcb_key_press_event_t *event);
 
 /* Settings */
 #define ANSI_LOGS 1
@@ -74,12 +76,15 @@ static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event);
 const keymap_t KEYMAPS[] = {
   { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit },
   { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close },
-  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir },
   { MOD1, XKB_KEY_Return, handle_keymap_terminal },
   { MOD1, XKB_KEY_d, handle_keymap_dmenu },
+  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir },
+  { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor },
+  { MOD1, XKB_KEY_h, handle_keymap_decsplitfactor },
 };
 #define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 #define MAX_REGIONS 100
+#define RESIZE_FACTOR 0.025f
 
 /* Constants */
 const char *LOG_LEVELS[] = {
@@ -266,6 +271,38 @@ static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event) {
     regions[parent].split = DIR_VERTICAL;
   else
     regions[parent].split = DIR_HORIZONTAL;
+  refresh_layout(
+      root_region,
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
+}
+static void handle_keymap_incsplitfactor(xcb_key_press_event_t *event) {
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].handle == event->child)
+      region = i;
+  if (region < 0) return;
+  int parent = regions[region].parent;
+  if (parent < 0) return;
+  regions[parent].factor += RESIZE_FACTOR;
+  if (regions[parent].factor > 1.0f - RESIZE_FACTOR)
+    regions[parent].factor = 1.0f - RESIZE_FACTOR;
+  refresh_layout(
+      root_region,
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
+}
+static void handle_keymap_decsplitfactor(xcb_key_press_event_t *event) {
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[i].handle == event->child)
+      region = i;
+  if (region < 0) return;
+  int parent = regions[region].parent;
+  if (parent < 0) return;
+  regions[parent].factor -= RESIZE_FACTOR;
+  if (regions[parent].factor < RESIZE_FACTOR)
+    regions[parent].factor = RESIZE_FACTOR;
   refresh_layout(
       root_region,
       0, 0, screen->width_in_pixels, screen->height_in_pixels
