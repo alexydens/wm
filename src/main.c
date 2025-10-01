@@ -641,6 +641,25 @@ static void remove_region(int region) {
 /* Event handler definitions */
 static void handle_create_notify(xcb_create_notify_event_t *event) {
   log_msg(LOG_LEVEL_INFO, "Processing create notify...");
+  xcb_generic_error_t *error = NULL;
+  xcb_get_window_attributes_cookie_t attributes_cookie =
+    xcb_get_window_attributes(connection, event->window);
+  xcb_get_window_attributes_reply_t *attributes =
+    xcb_get_window_attributes_reply(connection, attributes_cookie, &error);
+  if (!attributes) {
+    if (error)
+      log_msg(
+          LOG_LEVEL_ERROR,
+          "Failed to get window attributes (%d)", error->error_code
+      );
+    else
+      log_msg(
+          LOG_LEVEL_ERROR,
+          "Failed to get window attributes (no generic error)"
+      );
+  }
+  if (attributes->override_redirect) return;
+  free(attributes);
   add_region(event->parent, event->window);
 }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
@@ -649,11 +668,13 @@ static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
   for (int i = 0; i < MAX_REGIONS; i++)
     if (regions[i].exists && (regions[i].handle == event->window))
       region = i;
-  if (region < 0)
+  if (region < 0) {
     log_msg(
         LOG_LEVEL_WARNING,
         "Recieved destroy notify for window not in region tree"
     );
+    return;
+  }
   remove_region(region);
 }
 static void handle_map_notify(xcb_map_notify_event_t *event) { }
