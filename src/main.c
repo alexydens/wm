@@ -53,39 +53,55 @@ typedef struct {
   bool exists;
 } region_t;
 
+/* Keymap data */
+typedef union {
+  float f32;
+  void *ptr;
+} keymap_data_t;
 /* Keymap */
 typedef struct {
   uint16_t modifiers;
   xkb_keysym_t keysym;
-  void (*handler)(xcb_key_press_event_t *event);
+  void (*handler)(xcb_key_press_event_t *event, keymap_data_t data);
+  keymap_data_t data;
 } keymap_t;
 
 /* Keymap handler declaractions */
-static void handle_keymap_quit(xcb_key_press_event_t *event);
-static void handle_keymap_close(xcb_key_press_event_t *event);
-static void handle_keymap_terminal(xcb_key_press_event_t *event);
-static void handle_keymap_dmenu(xcb_key_press_event_t *event);
-static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event);
-static void handle_keymap_incsplitfactor(xcb_key_press_event_t *event);
-static void handle_keymap_decsplitfactor(xcb_key_press_event_t *event);
+static void handle_keymap_quit(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
+static void handle_keymap_close(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
+static void handle_keymap_spawnprocess(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
+static void handle_keymap_togglesplitdir(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
+static void handle_keymap_incsplitfactor(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
 
 /* Settings */
 #define ANSI_LOGS 1
 #define MOD1 XCB_MOD_MASK_1
 #define SHIFT XCB_MOD_MASK_SHIFT
-const keymap_t KEYMAPS[] = {
-  { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit },
-  { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close },
-  { MOD1, XKB_KEY_Return, handle_keymap_terminal },
-  { MOD1, XKB_KEY_d, handle_keymap_dmenu },
-  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir },
-  { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor },
-  { MOD1, XKB_KEY_h, handle_keymap_decsplitfactor },
-};
+#define RESIZE_FACTOR 0.025f
 #define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 #define MAX_REGIONS 100
-#define RESIZE_FACTOR 0.025f
 #define NUM_WORKSPACES 10
+const char *termargv[] = { "st", NULL };
+const char *dmenuargv[] = { "dmenu_run", "-m", "0", NULL };
+const keymap_t KEYMAPS[] = {
+  { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit, { } },
+  { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close, { } },
+  { MOD1, XKB_KEY_Return, handle_keymap_spawnprocess, { .ptr = termargv } },
+  { MOD1, XKB_KEY_d, handle_keymap_spawnprocess, { .ptr = dmenuargv } },
+  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir, { } },
+  { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
+  { MOD1, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
+};
 
 /* Constants */
 const char *LOG_LEVELS[] = {
@@ -226,10 +242,14 @@ int main(int argc, char *argv[]) {
 }
 
 /* Keymap handler definitions */
-static void handle_keymap_quit(xcb_key_press_event_t *event) {
+static void handle_keymap_quit(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
   running = false;
 }
-static void handle_keymap_close(xcb_key_press_event_t *event) {
+static void handle_keymap_close(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
   xcb_generic_error_t *error = NULL;
   const xcb_client_message_event_t wm_event = {
     .response_type = XCB_CLIENT_MESSAGE,
@@ -254,15 +274,14 @@ static void handle_keymap_close(xcb_key_press_event_t *event) {
     );
   }
 }
-static void handle_keymap_terminal(xcb_key_press_event_t *event) {
-  char *argv[] = { "st", NULL };
-  spawn_process_quiet(argv);
+static void handle_keymap_spawnprocess(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
+  spawn_process_quiet((char **)(data.ptr));
 }
-static void handle_keymap_dmenu(xcb_key_press_event_t *event) {
-  char *argv[] = { "dmenu_run", "-m", "0", NULL };
-  spawn_process_quiet(argv);
-}
-static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event) {
+static void handle_keymap_togglesplitdir(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
   int region = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
     if (regions[workspace][i].handle == event->child)
@@ -279,7 +298,9 @@ static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event) {
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
-static void handle_keymap_incsplitfactor(xcb_key_press_event_t *event) {
+static void handle_keymap_incsplitfactor(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
   int region = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
     if (regions[workspace][i].handle == event->child)
@@ -287,25 +308,11 @@ static void handle_keymap_incsplitfactor(xcb_key_press_event_t *event) {
   if (region < 0) return;
   int parent = regions[workspace][region].parent;
   if (parent < 0) return;
-  regions[workspace][parent].factor += RESIZE_FACTOR;
-  if (regions[workspace][parent].factor > 1.0f - RESIZE_FACTOR)
-    regions[workspace][parent].factor = 1.0f - RESIZE_FACTOR;
-  refresh_layout(
-      root_regions[workspace],
-      0, 0, screen->width_in_pixels, screen->height_in_pixels
-  );
-}
-static void handle_keymap_decsplitfactor(xcb_key_press_event_t *event) {
-  int region = -1;
-  for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[workspace][i].handle == event->child)
-      region = i;
-  if (region < 0) return;
-  int parent = regions[workspace][region].parent;
-  if (parent < 0) return;
-  regions[workspace][parent].factor -= RESIZE_FACTOR;
-  if (regions[workspace][parent].factor < RESIZE_FACTOR)
-    regions[workspace][parent].factor = RESIZE_FACTOR;
+  regions[workspace][parent].factor += data.f32;
+  if (regions[workspace][parent].factor > 1.0f - data.f32)
+    regions[workspace][parent].factor = 1.0f - data.f32;
+  if (regions[workspace][parent].factor < data.f32)
+    regions[workspace][parent].factor = data.f32;
   refresh_layout(
       root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
@@ -779,7 +786,7 @@ static void handle_key_press(xcb_key_press_event_t *event) {
   xkb_keysym_t keysym = xkb_state_key_get_one_sym(xkb_state, event->detail);
   for (int i = 0; i < NUM_KEYMAPS; i++)
     if ((event->state & KEYMAPS[i].modifiers) && keysym == KEYMAPS[i].keysym)
-      KEYMAPS[i].handler(event);
+      KEYMAPS[i].handler(event, KEYMAPS[i].data);
 }
 static void handle_key_release(xcb_key_release_event_t *event) { }
 static void handle_focus_in(xcb_focus_in_event_t *event) { }
