@@ -55,6 +55,7 @@ typedef struct {
 
 /* Keymap data */
 typedef union {
+  int i32;
   float f32;
   void *ptr;
 } keymap_data_t;
@@ -94,11 +95,11 @@ static void handle_keymap_incsplitfactor(
 const char *termargv[] = { "st", NULL };
 const char *dmenuargv[] = { "dmenu_run", "-m", "0", NULL };
 const keymap_t KEYMAPS[] = {
-  { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit, { } },
-  { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close, { } },
+  { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit, { .i32 = 0 } },
+  { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close, { .i32 = 0} },
   { MOD1, XKB_KEY_Return, handle_keymap_spawnprocess, { .ptr = termargv } },
   { MOD1, XKB_KEY_d, handle_keymap_spawnprocess, { .ptr = dmenuargv } },
-  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir, { } },
+  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir, { .i32 = 0} },
   { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
   { MOD1, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
 };
