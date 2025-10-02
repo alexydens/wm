@@ -85,6 +85,7 @@ const keymap_t KEYMAPS[] = {
 #define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 #define MAX_REGIONS 100
 #define RESIZE_FACTOR 0.025f
+#define NUM_WORKSPACES 10
 
 /* Constants */
 const char *LOG_LEVELS[] = {
@@ -116,8 +117,9 @@ static xcb_atom_t _NET_WM_WINDOW_TYPE_NOTIFICATION = 0;
 static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
-static region_t regions[MAX_REGIONS];
-static int root_region = -1;
+static region_t regions[MAX_REGIONS][NUM_WORKSPACES];
+static int root_regions[NUM_WORKSPACES] = { -1 };
+static int workspace = 0;
 
 /* Helper function declaractions */
 static void log_msg(log_level_t level, const char *format, ...)
@@ -263,49 +265,49 @@ static void handle_keymap_dmenu(xcb_key_press_event_t *event) {
 static void handle_keymap_togglesplitdir(xcb_key_press_event_t *event) {
   int region = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].handle == event->child)
+    if (regions[workspace][i].handle == event->child)
       region = i;
   if (region < 0) return;
-  int parent = regions[region].parent;
+  int parent = regions[workspace][region].parent;
   if (parent < 0) return;
-  if (regions[parent].split == DIR_HORIZONTAL)
-    regions[parent].split = DIR_VERTICAL;
+  if (regions[workspace][parent].split == DIR_HORIZONTAL)
+    regions[workspace][parent].split = DIR_VERTICAL;
   else
-    regions[parent].split = DIR_HORIZONTAL;
+    regions[workspace][parent].split = DIR_HORIZONTAL;
   refresh_layout(
-      root_region,
+      root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
 static void handle_keymap_incsplitfactor(xcb_key_press_event_t *event) {
   int region = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].handle == event->child)
+    if (regions[workspace][i].handle == event->child)
       region = i;
   if (region < 0) return;
-  int parent = regions[region].parent;
+  int parent = regions[workspace][region].parent;
   if (parent < 0) return;
-  regions[parent].factor += RESIZE_FACTOR;
-  if (regions[parent].factor > 1.0f - RESIZE_FACTOR)
-    regions[parent].factor = 1.0f - RESIZE_FACTOR;
+  regions[workspace][parent].factor += RESIZE_FACTOR;
+  if (regions[workspace][parent].factor > 1.0f - RESIZE_FACTOR)
+    regions[workspace][parent].factor = 1.0f - RESIZE_FACTOR;
   refresh_layout(
-      root_region,
+      root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
 static void handle_keymap_decsplitfactor(xcb_key_press_event_t *event) {
   int region = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].handle == event->child)
+    if (regions[workspace][i].handle == event->child)
       region = i;
   if (region < 0) return;
-  int parent = regions[region].parent;
+  int parent = regions[workspace][region].parent;
   if (parent < 0) return;
-  regions[parent].factor -= RESIZE_FACTOR;
-  if (regions[parent].factor < RESIZE_FACTOR)
-    regions[parent].factor = RESIZE_FACTOR;
+  regions[workspace][parent].factor -= RESIZE_FACTOR;
+  if (regions[workspace][parent].factor < RESIZE_FACTOR)
+    regions[workspace][parent].factor = RESIZE_FACTOR;
   refresh_layout(
-      root_region,
+      root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
@@ -513,30 +515,34 @@ static void change_window_rect(
 static void refresh_layout(
     int region, uint16_t x, uint16_t y, uint16_t width, uint16_t height
 ) {
-  if (regions[region].handle) {
+  if (regions[workspace][region].handle) {
     change_window_rect(
-        regions[region].handle,
+        regions[workspace][region].handle,
         x, y, width, height
     );
     return;
   }
-  uint16_t w = width
-    * (regions[region].split == DIR_HORIZONTAL ? regions[region].factor : 1.0f);
-  uint16_t h = height
-    * (regions[region].split == DIR_VERTICAL ? regions[region].factor : 1.0f);
-  refresh_layout(region[regions].child0, x, y, w, h);
+  uint16_t w = width * (
+      regions[workspace][region].split == DIR_HORIZONTAL
+      ? regions[workspace][region].factor : 1.0f
+  );
+  uint16_t h = height * (
+      regions[workspace][region].split == DIR_VERTICAL
+      ? regions[workspace][region].factor : 1.0f
+  );
+  refresh_layout(regions[workspace][region].child0, x, y, w, h);
   refresh_layout(
-      region[regions].child1,
-      x + (regions[region].split == DIR_HORIZONTAL) * w,
-      y + (regions[region].split == DIR_VERTICAL) * h,
-      regions[region].split == DIR_HORIZONTAL ? (width-w) : w,
-      regions[region].split == DIR_VERTICAL ? (height-h) : h
+      regions[workspace][region].child1,
+      x + (regions[workspace][region].split == DIR_HORIZONTAL) * w,
+      y + (regions[workspace][region].split == DIR_VERTICAL) * h,
+      regions[workspace][region].split == DIR_HORIZONTAL ? (width-w) : w,
+      regions[workspace][region].split == DIR_VERTICAL ? (height-h) : h
   );
 }
 static int get_empty_region(void) {
   int region = -1;
   for (int i = 0; i < MAX_REGIONS; i++) {
-    if (!(regions[i].exists)) {
+    if (!(regions[workspace][i].exists)) {
       region = i;
       break;
     }
@@ -546,95 +552,95 @@ static int get_empty_region(void) {
   return region;
 }
 static void add_region(xcb_window_t parent_window, xcb_window_t window) {
-  if (root_region < 0) {
-    regions[0].handle = window;
-    regions[0].parent = -1;
-    regions[0].child0 = -1;
-    regions[0].child1 = -1;
-    regions[0].split = DIR_HORIZONTAL;
-    regions[0].factor = 0.0f;
-    regions[0].exists = true;
-    root_region = 0;
+  if (root_regions[workspace] < 0) {
+    regions[workspace][0].handle = window;
+    regions[workspace][0].parent = -1;
+    regions[workspace][0].child0 = -1;
+    regions[workspace][0].child1 = -1;
+    regions[workspace][0].split = DIR_HORIZONTAL;
+    regions[workspace][0].factor = 0.0f;
+    regions[workspace][0].exists = true;
+    root_regions[workspace] = 0;
     refresh_layout(
-        root_region,
+        root_regions[workspace],
         0, 0, screen->width_in_pixels, screen->height_in_pixels
     );
     return;
   }
   int parent = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].handle == parent_window)
+    if (regions[workspace][i].handle == parent_window)
       parent = i;
-  if (parent < 0) parent = root_region;
+  if (parent < 0) parent = root_regions[workspace];
   int new_region = get_empty_region();
-  regions[new_region].exists = true;
+  regions[workspace][new_region].exists = true;
   int new_window_region = get_empty_region();
-  regions[new_window_region].exists = true;
-  int grandparent = regions[parent].parent;
-  if (grandparent < 0) root_region = new_region;
-  regions[parent].parent = new_region;
-  regions[new_region].handle = 0;
-  regions[new_region].parent = grandparent;
-  regions[new_region].child0 = new_window_region;
-  regions[new_region].child1 = parent;
-  regions[new_region].split = DIR_HORIZONTAL;
-  regions[new_region].factor = 0.5f;
+  regions[workspace][new_window_region].exists = true;
+  int grandparent = regions[workspace][parent].parent;
+  if (grandparent < 0) root_regions[workspace] = new_region;
+  regions[workspace][parent].parent = new_region;
+  regions[workspace][new_region].handle = 0;
+  regions[workspace][new_region].parent = grandparent;
+  regions[workspace][new_region].child0 = new_window_region;
+  regions[workspace][new_region].child1 = parent;
+  regions[workspace][new_region].split = DIR_HORIZONTAL;
+  regions[workspace][new_region].factor = 0.5f;
   if (grandparent >= 0) {
-    if (regions[grandparent].child0 == parent)
-      regions[grandparent].child0 = new_region;
-    else if (regions[grandparent].child1 == parent)
-      regions[grandparent].child1 = new_region;
+    if (regions[workspace][grandparent].child0 == parent)
+      regions[workspace][grandparent].child0 = new_region;
+    else if (regions[workspace][grandparent].child1 == parent)
+      regions[workspace][grandparent].child1 = new_region;
     else
       log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
   }
-  regions[new_window_region].handle = window;
-  regions[new_window_region].parent = new_region;
-  regions[new_window_region].child0 = -1;
-  regions[new_window_region].child1 = -1;
-  regions[new_window_region].split = DIR_HORIZONTAL;
-  regions[new_window_region].factor = 0.0f;
+  regions[workspace][new_window_region].handle = window;
+  regions[workspace][new_window_region].parent = new_region;
+  regions[workspace][new_window_region].child0 = -1;
+  regions[workspace][new_window_region].child1 = -1;
+  regions[workspace][new_window_region].split = DIR_HORIZONTAL;
+  regions[workspace][new_window_region].factor = 0.0f;
   refresh_layout(
-      root_region,
+      root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
 static void remove_region(int region) {
-  regions[region].exists = false;
-  int parent = regions[region].parent;
+  regions[workspace][region].exists = false;
+  int parent = regions[workspace][region].parent;
   if (parent < 0) {
-    if (region != root_region)
+    if (region != root_regions[workspace])
       log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
-    root_region = -1;
-    regions[root_region].exists = false;
+    root_regions[workspace] = -1;
+    regions[workspace][root_regions[workspace]].exists = false;
     return;
   }
-  regions[parent].exists = false;
+  regions[workspace][parent].exists = false;
   int sibling = -1;
-  if (regions[parent].child0 == region)
-    sibling = regions[parent].child1;
-  else if (regions[parent].child1 == region)
-    sibling = regions[parent].child0;
+  if (regions[workspace][parent].child0 == region)
+    sibling = regions[workspace][parent].child1;
+  else if (regions[workspace][parent].child1 == region)
+    sibling = regions[workspace][parent].child0;
   else
     log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
-  int grandparent = regions[parent].parent;
+  int grandparent = regions[workspace][parent].parent;
   if (grandparent < 0) {
-    root_region = sibling;
-    regions[sibling].parent = -1;
+    root_regions[workspace] = sibling;
+    regions[workspace][sibling].parent = -1;
     refresh_layout(
-        root_region,
+        root_regions[workspace],
         0, 0, screen->width_in_pixels, screen->height_in_pixels
     );
     return;
   }
-  regions[sibling].parent = grandparent;
-  if (regions[grandparent].child0 == parent)
-    regions[grandparent].child0 = sibling;
-  else if (regions[grandparent].child1 == parent)
-    regions[grandparent].child1 = sibling;
+  regions[workspace][sibling].parent = grandparent;
+  if (regions[workspace][grandparent].child0 == parent)
+    regions[workspace][grandparent].child0 = sibling;
+  else if (regions[workspace][grandparent].child1 == parent)
+    regions[workspace][grandparent].child1 = sibling;
   else
     log_msg(LOG_LEVEL_ERROR, "Corrupted region tree");
   refresh_layout(
-      root_region,
+      root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
@@ -704,7 +710,10 @@ static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
   log_msg(LOG_LEVEL_INFO, "Processing destroy notify...");
   int region = -1;
   for (int i = 0; i < MAX_REGIONS; i++)
-    if (regions[i].exists && (regions[i].handle == event->window))
+    if (
+      regions[workspace][i].exists
+      && (regions[workspace][i].handle == event->window)
+    )
       region = i;
   if (region < 0) {
     log_msg(
