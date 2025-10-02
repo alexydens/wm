@@ -108,11 +108,11 @@ static const xcb_setup_t *setup = NULL;
 static xcb_screen_t *screen = NULL;
 static xcb_window_t root = 0;
 static xcb_atom_t WM_PROTOCOLS = 0;
-static xcb_atom_t WM_TAKE_FOCUS = 0;
 static xcb_atom_t WM_DELETE_WINDOW = 0;
-static xcb_atom_t WM_CLASS = 0;
 static xcb_atom_t WM_TRANSIENT_FOR = 0;
 static xcb_atom_t _NET_WM_WINDOW_TYPE = 0;
+static xcb_atom_t _NET_WM_WINDOW_TYPE_DIALOG = 0;
+static xcb_atom_t _NET_WM_WINDOW_TYPE_NOTIFICATION = 0;
 static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
@@ -187,11 +187,12 @@ int main(int argc, char *argv[]) {
   connect();
   get_setup_info();
   WM_PROTOCOLS = get_atom("WM_PROTOCOLS");
-  WM_TAKE_FOCUS = get_atom("WM_TAKE_FOCUS");
   WM_DELETE_WINDOW = get_atom("WM_DELETE_WINDOW");
-  WM_CLASS = get_atom("WM_CLASS");
   WM_TRANSIENT_FOR = get_atom("WM_TRANSIENT_FOR");
   _NET_WM_WINDOW_TYPE = get_atom("_NET_WM_WINDOW_TYPE");
+  _NET_WM_WINDOW_TYPE_DIALOG = get_atom("_NET_WM_WINDOW_TYPE_DIALOG");
+  _NET_WM_WINDOW_TYPE_NOTIFICATION =
+    get_atom("_NET_WM_WINDOW_TYPE_NOTIFICATION");
   set_event_mask(
       root,
       XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT
@@ -649,17 +650,54 @@ static void handle_create_notify(xcb_create_notify_event_t *event) {
   if (!attributes) {
     if (error)
       log_msg(
-          LOG_LEVEL_ERROR,
+          LOG_LEVEL_WARNING,
           "Failed to get window attributes (%d)", error->error_code
       );
     else
       log_msg(
-          LOG_LEVEL_ERROR,
+          LOG_LEVEL_WARNING,
           "Failed to get window attributes (no generic error)"
       );
+  } else {
+    if (attributes->override_redirect) return;
+    free(attributes);
   }
-  if (attributes->override_redirect) return;
-  free(attributes);
+  xcb_get_property_cookie_t property_cookie = xcb_get_property(
+      connection, 0,
+      event->window,
+      WM_TRANSIENT_FOR,
+      XCB_ATOM_WINDOW,
+      0, 1
+  );
+  xcb_get_property_reply_t *property_reply = xcb_get_property_reply(
+      connection, property_cookie, NULL
+  );
+  if (property_reply && xcb_get_property_value_length(property_reply) == 4) {
+    free(property_reply);
+    return;
+  }
+  property_cookie = xcb_get_property(
+      connection, 0,
+      event->window,
+      _NET_WM_WINDOW_TYPE,
+      XCB_ATOM_ATOM,
+      0, 32
+  );
+  property_reply = xcb_get_property_reply(
+      connection, property_cookie, NULL
+  );
+  if (property_reply) {
+    bool floating = false;
+    int n = xcb_get_property_value_length(property_reply) / sizeof(xcb_atom_t);
+    xcb_atom_t *types = (xcb_atom_t *)xcb_get_property_value(property_reply);
+    for (int i = 0; i < n; i++) {
+      if (types[i] == _NET_WM_WINDOW_TYPE_DIALOG
+        || types[i] == _NET_WM_WINDOW_TYPE_NOTIFICATION)
+        floating = true;
+    }
+    free(property_reply);
+    if (floating) return;
+  }
   add_region(event->parent, event->window);
 }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
