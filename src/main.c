@@ -795,12 +795,8 @@ static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
   }
   remove_region(region);
 }
-static void handle_map_notify(xcb_map_notify_event_t *event) {
-  log_msg(LOG_LEVEL_INFO, "Recieved map notify...");
-}
-static void handle_unmap_notify(xcb_unmap_notify_event_t *event) {
-  log_msg(LOG_LEVEL_INFO, "Recieved unmap notify...");
-}
+static void handle_map_notify(xcb_map_notify_event_t *event) { }
+static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
 static void handle_reparent_notify(xcb_reparent_notify_event_t *event) { }
 static void handle_configure_notify(xcb_configure_notify_event_t *event) { }
 static void handle_gravity_notify(xcb_gravity_notify_event_t *event) { }
