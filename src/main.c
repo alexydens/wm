@@ -83,6 +83,9 @@ static void handle_keymap_togglesplitdir(
 static void handle_keymap_incsplitfactor(
     xcb_key_press_event_t *event, keymap_data_t data
 );
+static void handle_keymap_workspace(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
 
 /* Settings */
 #define ANSI_LOGS 1
@@ -102,6 +105,16 @@ const keymap_t KEYMAPS[] = {
   { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir, { .i32 = 0} },
   { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
   { MOD1, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
+  { MOD1, XKB_KEY_0, handle_keymap_workspace, { .i32 = 0 } },
+  { MOD1, XKB_KEY_1, handle_keymap_workspace, { .i32 = 1 } },
+  { MOD1, XKB_KEY_2, handle_keymap_workspace, { .i32 = 2 } },
+  { MOD1, XKB_KEY_3, handle_keymap_workspace, { .i32 = 3 } },
+  { MOD1, XKB_KEY_4, handle_keymap_workspace, { .i32 = 4 } },
+  { MOD1, XKB_KEY_5, handle_keymap_workspace, { .i32 = 5 } },
+  { MOD1, XKB_KEY_6, handle_keymap_workspace, { .i32 = 6 } },
+  { MOD1, XKB_KEY_7, handle_keymap_workspace, { .i32 = 7 } },
+  { MOD1, XKB_KEY_8, handle_keymap_workspace, { .i32 = 8 } },
+  { MOD1, XKB_KEY_9, handle_keymap_workspace, { .i32 = 9 } },
 };
 
 /* Constants */
@@ -135,8 +148,8 @@ static struct xkb_context *xkb_context = NULL;
 static struct xkb_keymap *xkb_keymap = NULL;
 static struct xkb_state *xkb_state = NULL;
 static region_t regions[MAX_REGIONS][NUM_WORKSPACES];
-static int root_regions[NUM_WORKSPACES] = { -1 };
-static int workspace = 0;
+static int root_regions[NUM_WORKSPACES]; /* = -1 */
+static int workspace = 1;
 
 /* Helper function declaractions */
 static void log_msg(log_level_t level, const char *format, ...)
@@ -223,6 +236,9 @@ int main(int argc, char *argv[]) {
   init_xkb();
   for (int i = 0; i < NUM_KEYMAPS; i++)
     grab_keymap(KEYMAPS[i].modifiers, KEYMAPS[i].keysym);
+  /* Set each root_region to -1 */
+  for (int i = 0; i < NUM_WORKSPACES; i++)
+    root_regions[i] = -1;
 
   /* Event loop */
   log_msg(LOG_LEVEL_INFO, "Processing events...");
@@ -314,6 +330,53 @@ static void handle_keymap_incsplitfactor(
     regions[workspace][parent].factor = 1.0f - data.f32;
   if (regions[workspace][parent].factor < data.f32)
     regions[workspace][parent].factor = data.f32;
+  refresh_layout(
+      root_regions[workspace],
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
+}
+static void handle_keymap_workspace(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
+  xcb_generic_error_t *error = NULL;
+  for (int i = 0; i < MAX_REGIONS; i++) {
+    if (
+      !(regions[workspace][i].exists)
+      || regions[workspace][i].child0 >= 0
+    ) continue;
+    xcb_void_cookie_t cookie = xcb_unmap_window(
+        connection, regions[workspace][i].handle
+    );
+    error = xcb_request_check(connection, cookie);
+    if (error) {
+      int error_code = error->error_code;
+      free(error);
+      log_msg(
+          LOG_LEVEL_ERROR,
+          "Failed to unmap window (%d)", error_code
+      );
+    }
+  }
+  workspace = data.i32;
+  for (int i = 0; i < MAX_REGIONS; i++) {
+    if (
+      !(regions[workspace][i].exists)
+      || regions[workspace][i].child0 >= 0
+    ) continue;
+    xcb_void_cookie_t cookie = xcb_map_window(
+        connection, regions[workspace][i].handle
+    );
+    error = xcb_request_check(connection, cookie);
+    if (error) {
+      int error_code = error->error_code;
+      free(error);
+      log_msg(
+          LOG_LEVEL_ERROR,
+          "Failed to map window (%d)", error_code
+      );
+    }
+  }
+  if (root_regions[workspace] < 0) return;
   refresh_layout(
       root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
