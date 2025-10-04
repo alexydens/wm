@@ -89,12 +89,12 @@ static void handle_keymap_workspace(
 
 /* Settings */
 #define ANSI_LOGS 1
-#define MOD1 XCB_MOD_MASK_1
-#define SHIFT XCB_MOD_MASK_SHIFT
 #define RESIZE_FACTOR 0.025f
-#define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 #define MAX_REGIONS 100
 #define NUM_WORKSPACES 10
+#define MOD1 XCB_MOD_MASK_1
+#define MOD4 XCB_MOD_MASK_4
+#define SHIFT XCB_MOD_MASK_SHIFT
 const char *termargv[] = { "st", NULL };
 const char *dmenuargv[] = { "dmenu_run", "-m", "0", NULL };
 const keymap_t KEYMAPS[] = {
@@ -116,6 +116,7 @@ const keymap_t KEYMAPS[] = {
   { MOD1, XKB_KEY_8, handle_keymap_workspace, { .i32 = 8 } },
   { MOD1, XKB_KEY_9, handle_keymap_workspace, { .i32 = 9 } },
 };
+#define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 
 /* Constants */
 const char *LOG_LEVELS[] = {
@@ -167,6 +168,7 @@ static void refresh_layout(
 );
 static void add_region(xcb_window_t parent, xcb_window_t window);
 static void remove_region(int region);
+static bool window_isfloat(xcb_window_t window);
 
 /* Event handler declaractions */
 #define DECLARE_HANDLER(event, ident)\
@@ -706,13 +708,10 @@ static void remove_region(int region) {
       0, 0, screen->width_in_pixels, screen->height_in_pixels
   );
 }
-
-/* Event handler definitions */
-static void handle_create_notify(xcb_create_notify_event_t *event) {
-  log_msg(LOG_LEVEL_INFO, "Processing create notify...");
+static bool window_isfloat(xcb_window_t window) {
   xcb_generic_error_t *error = NULL;
   xcb_get_window_attributes_cookie_t attributes_cookie =
-    xcb_get_window_attributes(connection, event->window);
+    xcb_get_window_attributes(connection, window);
   xcb_get_window_attributes_reply_t *attributes =
     xcb_get_window_attributes_reply(connection, attributes_cookie, &error);
   if (!attributes) {
@@ -727,10 +726,16 @@ static void handle_create_notify(xcb_create_notify_event_t *event) {
           "Failed to get window attributes (no generic error)"
       );
   } else {
-    if (attributes->override_redirect) return;
+    if (attributes->override_redirect) return true;
     free(attributes);
   }
-  add_region(event->parent, event->window);
+  return false;
+}
+
+/* Event handler definitions */
+static void handle_create_notify(xcb_create_notify_event_t *event) {
+  log_msg(LOG_LEVEL_INFO, "Processing create notify...");
+  if (!window_isfloat(event->window)) add_region(event->parent, event->window);
 }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
   log_msg(LOG_LEVEL_INFO, "Processing destroy notify...");
