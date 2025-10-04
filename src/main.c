@@ -86,6 +86,9 @@ static void handle_keymap_incsplitfactor(
 static void handle_keymap_workspace(
     xcb_key_press_event_t *event, keymap_data_t data
 );
+static void handle_keymap_windowtoworkspace(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
 
 /* Settings */
 #define ANSI_LOGS 1
@@ -105,16 +108,20 @@ const keymap_t KEYMAPS[] = {
   { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir, { .i32 = 0} },
   { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
   { MOD1, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
-  { MOD1, XKB_KEY_0, handle_keymap_workspace, { .i32 = 0 } },
-  { MOD1, XKB_KEY_1, handle_keymap_workspace, { .i32 = 1 } },
-  { MOD1, XKB_KEY_2, handle_keymap_workspace, { .i32 = 2 } },
-  { MOD1, XKB_KEY_3, handle_keymap_workspace, { .i32 = 3 } },
-  { MOD1, XKB_KEY_4, handle_keymap_workspace, { .i32 = 4 } },
-  { MOD1, XKB_KEY_5, handle_keymap_workspace, { .i32 = 5 } },
-  { MOD1, XKB_KEY_6, handle_keymap_workspace, { .i32 = 6 } },
-  { MOD1, XKB_KEY_7, handle_keymap_workspace, { .i32 = 7 } },
-  { MOD1, XKB_KEY_8, handle_keymap_workspace, { .i32 = 8 } },
-  { MOD1, XKB_KEY_9, handle_keymap_workspace, { .i32 = 9 } },
+#define WORKSPACE_KEYMAPS(n)\
+  { MOD1, XKB_KEY_##n, handle_keymap_workspace, { .i32 = n } },\
+  { MOD1|SHIFT, XKB_KEY_##n, handle_keymap_windowtoworkspace, { .i32 = n } },
+  WORKSPACE_KEYMAPS(0)
+  WORKSPACE_KEYMAPS(1)
+  WORKSPACE_KEYMAPS(2)
+  WORKSPACE_KEYMAPS(3)
+  WORKSPACE_KEYMAPS(4)
+  WORKSPACE_KEYMAPS(5)
+  WORKSPACE_KEYMAPS(6)
+  WORKSPACE_KEYMAPS(7)
+  WORKSPACE_KEYMAPS(8)
+  WORKSPACE_KEYMAPS(9)
+#undef WORKSPACE_KEYMAPS
 };
 #define NUM_KEYMAPS ((int)(sizeof(KEYMAPS)/sizeof(keymap_t)))
 
@@ -370,6 +377,20 @@ static void handle_keymap_workspace(
     }
   }
   if (root_regions[workspace] < 0) return;
+  refresh_layout(
+      root_regions[workspace],
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
+}
+static void handle_keymap_windowtoworkspace(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
+  if (data.i32 == workspace) return;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[workspace][i].handle == event->child)
+      remove_region(i);
+  handle_keymap_workspace(event, data);
+  add_region(0, event->child);
   refresh_layout(
       root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
@@ -809,7 +830,7 @@ static void handle_circulate_request(xcb_circulate_request_event_t *event) { }
 static void handle_key_press(xcb_key_press_event_t *event) {
   xkb_keysym_t keysym = xkb_state_key_get_one_sym(xkb_state, event->detail);
   for (int i = 0; i < NUM_KEYMAPS; i++)
-    if ((event->state & KEYMAPS[i].modifiers) && keysym == KEYMAPS[i].keysym)
+    if ((event->state == KEYMAPS[i].modifiers) && keysym == KEYMAPS[i].keysym)
       KEYMAPS[i].handler(event, KEYMAPS[i].data);
 }
 static void handle_key_release(xcb_key_release_event_t *event) { }
