@@ -756,10 +756,7 @@ static bool window_isfloat(xcb_window_t window) {
 }
 
 /* Event handler definitions */
-static void handle_create_notify(xcb_create_notify_event_t *event) {
-  log_msg(LOG_LEVEL_INFO, "Processing create notify...");
-  if (!window_isfloat(event->window)) add_region(event->parent, event->window);
-}
+static void handle_create_notify(xcb_create_notify_event_t *event) { }
 static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
   log_msg(LOG_LEVEL_INFO, "Processing destroy notify...");
   int region = -1;
@@ -778,7 +775,15 @@ static void handle_destroy_notify(xcb_destroy_notify_event_t *event) {
   }
   remove_region(region);
 }
-static void handle_map_notify(xcb_map_notify_event_t *event) { }
+static void handle_map_notify(xcb_map_notify_event_t *event) {
+  log_msg(LOG_LEVEL_INFO, "Processing map notify...");
+  for (int i = 0; i < NUM_WORKSPACES; i++)
+    for (int j = 0; j < MAX_REGIONS; j++)
+      if (regions[i][j].exists && regions[i][j].handle == event->window)
+        return;
+  if (!window_isfloat(event->window))
+    add_region(event->event, event->window);
+}
 static void handle_unmap_notify(xcb_unmap_notify_event_t *event) { }
 static void handle_reparent_notify(xcb_reparent_notify_event_t *event) { }
 static void handle_configure_notify(xcb_configure_notify_event_t *event) { }
