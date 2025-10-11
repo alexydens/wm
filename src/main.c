@@ -101,16 +101,16 @@ static void handle_keymap_windowtoworkspace(
 const char *termargv[] = { "st", NULL };
 const char *dmenuargv[] = { "dmenu_run", "-m", "0", NULL };
 const keymap_t KEYMAPS[] = {
-  { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit, { .i32 = 0 } },
-  { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close, { .i32 = 0} },
-  { MOD1, XKB_KEY_Return, handle_keymap_spawnprocess, { .ptr = termargv } },
-  { MOD1, XKB_KEY_d, handle_keymap_spawnprocess, { .ptr = dmenuargv } },
-  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir, { .i32 = 0} },
-  { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
-  { MOD1, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
+  { MOD4|SHIFT, XKB_KEY_c, handle_keymap_quit, { .i32 = 0 } },
+  { MOD4|SHIFT, XKB_KEY_q, handle_keymap_close, { .i32 = 0} },
+  { MOD4, XKB_KEY_Return, handle_keymap_spawnprocess, { .ptr = termargv } },
+  { MOD4, XKB_KEY_d, handle_keymap_spawnprocess, { .ptr = dmenuargv } },
+  { MOD4, XKB_KEY_k, handle_keymap_togglesplitdir, { .i32 = 0} },
+  { MOD4, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
+  { MOD4, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
 #define WORKSPACE_KEYMAPS(n)\
-  { MOD1, XKB_KEY_##n, handle_keymap_workspace, { .i32 = n } },\
-  { MOD1|SHIFT, XKB_KEY_##n, handle_keymap_windowtoworkspace, { .i32 = n } },
+  { MOD4, XKB_KEY_##n, handle_keymap_workspace, { .i32 = n } },\
+  { MOD4|SHIFT, XKB_KEY_##n, handle_keymap_windowtoworkspace, { .i32 = n } },
   WORKSPACE_KEYMAPS(0)
   WORKSPACE_KEYMAPS(1)
   WORKSPACE_KEYMAPS(2)
