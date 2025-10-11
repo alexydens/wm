@@ -730,6 +730,7 @@ static void remove_region(int region) {
   );
 }
 static bool window_isfloat(xcb_window_t window) {
+  bool floating = false;
   xcb_generic_error_t *error = NULL;
   xcb_get_window_attributes_cookie_t attributes_cookie =
     xcb_get_window_attributes(connection, window);
@@ -747,10 +748,11 @@ static bool window_isfloat(xcb_window_t window) {
           "Failed to get window attributes (no generic error)"
       );
   } else {
-    if (attributes->override_redirect) return true;
+    if (attributes->override_redirect) floating = true;
+    if (attributes->map_state != XCB_MAP_STATE_VIEWABLE) floating = true;
     free(attributes);
   }
-  return false;
+  return floating;
 }
 
 /* Event handler definitions */
