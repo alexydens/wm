@@ -80,6 +80,9 @@ static void handle_keymap_spawnprocess(
 static void handle_keymap_togglesplitdir(
     xcb_key_press_event_t *event, keymap_data_t data
 );
+static void handle_keymap_swapsplit(
+    xcb_key_press_event_t *event, keymap_data_t data
+);
 static void handle_keymap_incsplitfactor(
     xcb_key_press_event_t *event, keymap_data_t data
 );
@@ -100,14 +103,21 @@ static void handle_keymap_windowtoworkspace(
 #define SHIFT XCB_MOD_MASK_SHIFT
 const char *termargv[] = { "st", NULL };
 const char *dmenuargv[] = { "dmenu_run", "-m", "0", NULL };
+const char *browserargv[] = { "min-browser", NULL };
+const char *runscriptargv[] = {
+  "sh", "/home/hungrygreylag/scripts/runscript", NULL
+};
 const keymap_t KEYMAPS[] = {
-  { MOD4|SHIFT, XKB_KEY_c, handle_keymap_quit, { .i32 = 0 } },
-  { MOD4|SHIFT, XKB_KEY_q, handle_keymap_close, { .i32 = 0} },
-  { MOD4, XKB_KEY_Return, handle_keymap_spawnprocess, { .ptr = termargv } },
-  { MOD4, XKB_KEY_d, handle_keymap_spawnprocess, { .ptr = dmenuargv } },
-  { MOD4, XKB_KEY_k, handle_keymap_togglesplitdir, { .i32 = 0} },
-  { MOD4, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
-  { MOD4, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
+  { MOD1|SHIFT, XKB_KEY_c, handle_keymap_quit, { .i32 = 0 } },
+  { MOD1|SHIFT, XKB_KEY_q, handle_keymap_close, { .i32 = 0} },
+  { MOD1, XKB_KEY_Return, handle_keymap_spawnprocess, { .ptr = termargv } },
+  { MOD1, XKB_KEY_d, handle_keymap_spawnprocess, { .ptr = dmenuargv } },
+  { MOD1, XKB_KEY_r, handle_keymap_spawnprocess, { .ptr = runscriptargv } },
+  { MOD1, XKB_KEY_b, handle_keymap_spawnprocess, { .ptr = browserargv } },
+  { MOD1, XKB_KEY_k, handle_keymap_togglesplitdir, { .i32 = 0} },
+  { MOD1, XKB_KEY_j, handle_keymap_swapsplit, { .i32 = 0} },
+  { MOD1, XKB_KEY_l, handle_keymap_incsplitfactor, { .f32 = RESIZE_FACTOR } },
+  { MOD1, XKB_KEY_h, handle_keymap_incsplitfactor, { .f32 = -RESIZE_FACTOR } },
 #define WORKSPACE_KEYMAPS(n)\
   { MOD4, XKB_KEY_##n, handle_keymap_workspace, { .i32 = n } },\
   { MOD4|SHIFT, XKB_KEY_##n, handle_keymap_windowtoworkspace, { .i32 = n } },
@@ -310,6 +320,24 @@ static void handle_keymap_togglesplitdir(
     regions[workspace][parent].split = DIR_VERTICAL;
   else
     regions[workspace][parent].split = DIR_HORIZONTAL;
+  refresh_layout(
+      root_regions[workspace],
+      0, 0, screen->width_in_pixels, screen->height_in_pixels
+  );
+}
+static void handle_keymap_swapsplit(
+    xcb_key_press_event_t *event, keymap_data_t data
+) {
+  int region = -1;
+  for (int i = 0; i < MAX_REGIONS; i++)
+    if (regions[workspace][i].handle == event->child)
+      region = i;
+  if (region < 0) return;
+  int parent = regions[workspace][region].parent;
+  if (parent < 0) return;
+  int tmp = regions[workspace][parent].child0;
+  regions[workspace][parent].child0 = regions[workspace][parent].child1;
+  regions[workspace][parent].child1 = tmp;
   refresh_layout(
       root_regions[workspace],
       0, 0, screen->width_in_pixels, screen->height_in_pixels
